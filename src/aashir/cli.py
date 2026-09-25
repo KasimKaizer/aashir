@@ -1,11 +1,12 @@
 import argparse
 import os
-import warnings
 from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
+
+from aashir.tools import AGENT_TOOLS, execute_tool_call
 
 load_dotenv()
 API_KEY = os.getenv("OPENAI_API_KEY")
@@ -24,7 +25,6 @@ def main():
         "OPENAI_API_KEY": API_KEY,
         "OPENAI_BASE_URL": BASE_URL,
         "BASE_MODEL_NAME": MODEL_NAME,
-        "SYSTEM_PROMPT_FILE": SYSTEM_PROMPT,
         "REASONING_EFFORT": REASONING_EFFORT,
     }
     missing: list[str] = [
@@ -41,8 +41,8 @@ def main():
         if custom_prompt := Path(SYSTEM_PROMPT).read_text(encoding="utf-8"):
             prompt = custom_prompt
     except (UnicodeError, OSError, TypeError) as e:
-        warnings.warn(
-            f"custom system prompt could not be loaded because of {e}, using default prompt"
+        print(
+            f"warn: custom system prompt could not be loaded because of the following: {e}, using default prompt"
         )
 
     message_histry: list[ChatCompletionMessageParam] = [
@@ -51,18 +51,49 @@ def main():
     ]
 
     while True:
-        chat = client.chat.completions.create(
+        with client.chat.completions.stream(
             model=MODEL_NAME,
             reasoning_effort=REASONING_EFFORT,
             messages=message_histry,
-        )
+            tools=AGENT_TOOLS,
+        ) as stream:
+            for event in stream:
+                if event.type == "content.delta":
+                    print(event.delta, end="", flush=True)
 
-        if not chat.choices or len(chat.choices) == 0:
+            completion = stream.get_final_completion()
+
+        if not completion.choices or len(completion.choices) == 0:
             raise RuntimeError("no choices in response")
 
-        response = chat.choices[0].message
-        print(response.content, end="")
-        break
+        response = completion.choices[0].message
+        if not response.tool_calls:
+            break
+
+        message_histry.append(
+            {
+                "role": "assistant",
+                "content": response.content,
+                "tool_calls": [
+                    {
+                        "id": tool_call.id,
+                        "function": tool_call.function.model_dump(exclude_none=True),
+                        "type": tool_call.type,
+                    }
+                    for tool_call in response.tool_calls
+                ],
+            }
+        )
+        for tool_call in response.tool_calls:
+            message_histry.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": execute_tool_call(
+                        tool_call.function.name, tool_call.function.arguments
+                    ),
+                }
+            )
 
 
 if __name__ == "__main__":
