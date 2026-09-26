@@ -23,6 +23,27 @@ AGENT_TOOLS: list[ChatCompletionToolUnionParam] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "Write",
+            "description": "Write content to a file",
+            "parameters": {
+                "type": "object",
+                "required": ["file_path", "content"],
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The path of the file to write to",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The content to write to the file",
+                    },
+                },
+            },
+        },
+    },
 ]
 
 
@@ -40,7 +61,8 @@ def execute_tool_call(tool_name: str, raw_arguments: str) -> str:
             print("Using Read Tool")
             return execute_read(arguments)
         case "Write":
-            pass
+            print("Using Write Tool")
+            return execute_write(arguments)
         case "Edit":
             pass
             # return execute_edit(arguments)
@@ -61,5 +83,25 @@ def execute_read(arguments) -> str:
         content = Path(raw_file_path).read_text()
         print(f"read {raw_file_path}")
         return content
+    except (UnicodeError, OSError) as e:
+        return f"error: {e}"
+
+
+def execute_write(arguments) -> str:
+    raw_file_path = arguments.get("file_path")
+    if not isinstance(raw_file_path, str) or not raw_file_path:
+        return "error: file_path must be a non-empty string"
+
+    content = arguments.get("content")
+    if not isinstance(content, str):
+        return "error: content must be a string"
+
+    try:
+        file_path = Path(raw_file_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        chr_count = file_path.write_text(content, encoding="utf-8")
+        msg = f" written {chr_count} characters in {raw_file_path}"
+        print(msg)
+        return f"success: {msg}"
     except (UnicodeError, OSError) as e:
         return f"error: {e}"

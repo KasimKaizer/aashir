@@ -150,3 +150,106 @@ def test_main_preserves_error_after_partial_output(
         cli.main()
 
     assert capsys.readouterr().out == "Partial"
+
+
+@pytest.fixture
+def run_tool_round_trip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[str, str], httpx2.Request]:
+    monkeypatch.chdir(tmp_path)
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("You are a test assistant.", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["aashir", "-p", "use a tool"])
+    monkeypatch.setattr(cli, "API_KEY", "test-key")
+    monkeypatch.setattr(cli, "BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setattr(cli, "MODEL_NAME", "test-model")
+    monkeypatch.setattr(cli, "SYSTEM_PROMPT", str(prompt_file))
+    monkeypatch.setattr(cli, "REASONING_EFFORT", "medium")
+
+    def run(tool_name: str, arguments: str) -> httpx2.Request:
+        tool_chunk = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_tool",
+                                "type": "function",
+                                "function": {"name": tool_name, "arguments": arguments},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        }
+        requests: list[httpx2.Request] = []
+
+        def respond(request: httpx2.Request) -> httpx2.Response:
+            requests.append(request)
+            body = (
+                f"data: {json.dumps(tool_chunk)}\n\n".encode()
+                if len(requests) == 1
+                else _chunk("Done", finish_reason="stop")
+            )
+            return httpx2.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=body + b"data: [DONE]\n\n",
+            )
+
+        def make_client(*, api_key: str, base_url: str) -> OpenAI:
+            return OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                max_retries=0,
+                http_client=httpx2.Client(transport=httpx2.MockTransport(respond)),
+            )
+
+        monkeypatch.setattr(cli, "OpenAI", make_client)
+        cli.main()
+        assert len(requests) == 2
+        return requests[1]
+
+    return run
+
+
+def test_main_returns_read_result_to_model(
+    tmp_path: Path,
+    run_tool_round_trip: Callable[[str, str], httpx2.Request],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "note.txt").write_text("café\n", encoding="utf-8")
+
+    request = run_tool_round_trip("Read", json.dumps({"file_path": "note.txt"}))
+
+    messages = json.loads(request.content)["messages"]
+    assert messages[-2]["role"] == "assistant"
+    assert messages[-1] == {
+        "role": "tool",
+        "tool_call_id": "call_tool",
+        "content": "café\n",
+    }
+    assert "Done" in capsys.readouterr().out
+
+
+def test_main_returns_write_result_to_model(
+    tmp_path: Path, run_tool_round_trip: Callable[[str, str], httpx2.Request]
+) -> None:
+    arguments = json.dumps({"file_path": "notes/note.txt", "content": "café\n"})
+
+    request = run_tool_round_trip("Write", arguments)
+
+    messages = json.loads(request.content)["messages"]
+    assert (tmp_path / "notes" / "note.txt").read_text(encoding="utf-8") == "café\n"
+    assert messages[-2]["role"] == "assistant"
+    assert messages[-1]["role"] == "tool"
+    assert messages[-1]["tool_call_id"] == "call_tool"
+    assert messages[-1]["content"].startswith("success:")
