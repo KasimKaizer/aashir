@@ -27,14 +27,14 @@ AGENT_TOOLS: list[ChatCompletionToolUnionParam] = [
         "type": "function",
         "function": {
             "name": "Write",
-            "description": "Write content to a file",
+            "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
             "parameters": {
                 "type": "object",
                 "required": ["file_path", "content"],
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "The path of the file to write to",
+                        "description": "Path to the file to write (relative or absolute)",
                     },
                     "content": {
                         "type": "string",
