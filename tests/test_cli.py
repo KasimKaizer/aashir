@@ -155,7 +155,7 @@ def test_main_preserves_error_after_partial_output(
 @pytest.fixture
 def run_tool_round_trip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Callable[[str, str], httpx2.Request]:
+) -> Callable[[str, str], tuple[httpx2.Request, httpx2.Request]]:
     monkeypatch.chdir(tmp_path)
     prompt_file = tmp_path / "prompt.txt"
     prompt_file.write_text("You are a test assistant.", encoding="utf-8")
@@ -166,7 +166,7 @@ def run_tool_round_trip(
     monkeypatch.setattr(cli, "SYSTEM_PROMPT", str(prompt_file))
     monkeypatch.setattr(cli, "REASONING_EFFORT", "medium")
 
-    def run(tool_name: str, arguments: str) -> httpx2.Request:
+    def run(tool_name: str, arguments: str) -> tuple[httpx2.Request, httpx2.Request]:
         tool_chunk = {
             "id": "chatcmpl-test",
             "object": "chat.completion.chunk",
@@ -216,19 +216,19 @@ def run_tool_round_trip(
         monkeypatch.setattr(cli, "OpenAI", make_client)
         cli.main()
         assert len(requests) == 2
-        return requests[1]
+        return requests[0], requests[1]
 
     return run
 
 
-def test_main_returns_read_result_to_model(
+def test_main_returns_read_file_result_to_model(
     tmp_path: Path,
-    run_tool_round_trip: Callable[[str, str], httpx2.Request],
+    run_tool_round_trip: Callable[[str, str], tuple[httpx2.Request, httpx2.Request]],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     (tmp_path / "note.txt").write_text("café\n", encoding="utf-8")
 
-    request = run_tool_round_trip("Read", json.dumps({"file_path": "note.txt"}))
+    _, request = run_tool_round_trip("read_file", json.dumps({"file_path": "note.txt"}))
 
     messages = json.loads(request.content)["messages"]
     assert messages[-2]["role"] == "assistant"
@@ -240,15 +240,73 @@ def test_main_returns_read_result_to_model(
     assert "Done" in capsys.readouterr().out
 
 
-def test_main_returns_write_result_to_model(
-    tmp_path: Path, run_tool_round_trip: Callable[[str, str], httpx2.Request]
+def test_main_returns_write_file_result_to_model(
+    tmp_path: Path,
+    run_tool_round_trip: Callable[[str, str], tuple[httpx2.Request, httpx2.Request]],
 ) -> None:
     arguments = json.dumps({"file_path": "notes/note.txt", "content": "café\n"})
 
-    request = run_tool_round_trip("Write", arguments)
+    _, request = run_tool_round_trip("write_file", arguments)
 
     messages = json.loads(request.content)["messages"]
     assert (tmp_path / "notes" / "note.txt").read_text(encoding="utf-8") == "café\n"
+    assert messages[-2]["role"] == "assistant"
+    assert messages[-1]["role"] == "tool"
+    assert messages[-1]["tool_call_id"] == "call_tool"
+    assert messages[-1]["content"].startswith("success:")
+
+
+def test_main_advertises_edit_file_tool_to_model(
+    tmp_path: Path,
+    run_tool_round_trip: Callable[
+        [str, str], tuple[httpx2.Request, httpx2.Request]
+    ],
+) -> None:
+    (tmp_path / "note.txt").write_text("note", encoding="utf-8")
+
+    initial_request, _ = run_tool_round_trip(
+        "read_file", json.dumps({"file_path": "note.txt"})
+    )
+
+    initial_payload = json.loads(initial_request.content)
+    edit_function = next(
+        tool["function"]
+        for tool in initial_payload["tools"]
+        if tool["function"]["name"] == "edit_file"
+    )
+    parameters = edit_function["parameters"]
+    assert set(parameters["required"]) == {"file_path", "edits"}
+    assert parameters["properties"]["file_path"]["type"] == "string"
+    edits_schema = parameters["properties"]["edits"]
+    assert edits_schema["type"] == "array"
+    edit_schema = edits_schema["items"]
+    assert set(edit_schema["required"]) == {"oldText", "newText"}
+    assert edit_schema["properties"]["oldText"]["type"] == "string"
+    assert edit_schema["properties"]["newText"]["type"] == "string"
+
+
+def test_main_returns_edit_file_result_to_model(
+    tmp_path: Path,
+    run_tool_round_trip: Callable[
+        [str, str], tuple[httpx2.Request, httpx2.Request]
+    ],
+) -> None:
+    path = tmp_path / "note.txt"
+    path.write_text("title=old\nstatus=ready\n", encoding="utf-8")
+    arguments = json.dumps(
+        {
+            "file_path": "note.txt",
+            "edits": [
+                {"oldText": "title=old", "newText": "title=new"},
+                {"oldText": "status=ready", "newText": "status=done"},
+            ],
+        }
+    )
+
+    _, result_request = run_tool_round_trip("edit_file", arguments)
+
+    messages = json.loads(result_request.content)["messages"]
+    assert path.read_text(encoding="utf-8") == "title=new\nstatus=done\n"
     assert messages[-2]["role"] == "assistant"
     assert messages[-1]["role"] == "tool"
     assert messages[-1]["tool_call_id"] == "call_tool"
