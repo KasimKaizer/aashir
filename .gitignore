@@ -134,15 +134,18 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# uv stuff:
+.uv-cache
+
 # PyPI configuration file
 .pypirc
 
 # AI Tools
-.serena
 .codegraph
+.playwright-mcp
 
 # Misc
 codebook.toml
 
-# Local learning roadmap
+# Local roadmap
 /plan/
