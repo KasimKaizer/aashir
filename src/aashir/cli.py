@@ -1,12 +1,25 @@
 import argparse
 import os
+from collections.abc import Iterable
 from pathlib import Path
+from typing import assert_never
 
 from dotenv import load_dotenv
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
-from aashir.tools import AGENT_TOOLS, execute_tool_call
+from aashir.agent import (
+    AgentEvent,
+    AgentRequest,
+    AnswerDelta,
+    ReasoningDelta,
+    ReasoningSummary,
+    ToolCallStarted,
+    ToolResult,
+    TurnCompleted,
+    run_agent,
+)
+from aashir.tools import AGENT_TOOLS
 
 load_dotenv()
 API_KEY = os.getenv("OPENAI_API_KEY")
@@ -16,7 +29,16 @@ SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT_FILE")
 REASONING_EFFORT = os.getenv("REASONING_EFFORT")
 
 
-def main():
+def _configure_request() -> AgentRequest:
+    """Parse CLI input and build the validated request for an agent run.
+
+    Returns:
+        The agent request assembled from the command-line prompt and settings.
+
+    Raises:
+        RuntimeError: If required settings are missing.
+        SystemExit: If command-line arguments are invalid.
+    """
     p = argparse.ArgumentParser()
     p.add_argument("-p", required=True)
     cli_args = p.parse_args()
@@ -34,66 +56,55 @@ def main():
         missing_list: str = ", ".join(missing)
         raise RuntimeError(f"Missing required variables: {missing_list}")
 
-    client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
-
     prompt: str = "You are a helpful assistant."
-    try:
-        if custom_prompt := Path(SYSTEM_PROMPT).read_text(encoding="utf-8"):
-            prompt = custom_prompt
-    except (UnicodeError, OSError, TypeError) as e:
-        print(
-            f"warn: custom system prompt could not be loaded because of the following: {e}, using default prompt"
-        )
+    if SYSTEM_PROMPT:
+        try:
+            if custom_prompt := Path(SYSTEM_PROMPT).read_text(encoding="utf-8"):
+                prompt = custom_prompt
+        except (UnicodeError, OSError) as e:
+            print(
+                f"warn: custom system prompt could not be loaded because of the following: {e}, using default prompt"
+            )
 
-    message_histry: list[ChatCompletionMessageParam] = [
+    message_history: list[ChatCompletionMessageParam] = [
         {"role": "system", "content": prompt},
         {"role": "user", "content": cli_args.p},
     ]
 
-    while True:
-        with client.chat.completions.stream(
-            model=MODEL_NAME,
-            reasoning_effort=REASONING_EFFORT,
-            messages=message_histry,
-            tools=AGENT_TOOLS,
-        ) as stream:
-            for event in stream:
-                if event.type == "content.delta":
-                    print(event.delta, end="", flush=True)
+    return AgentRequest(
+        model=MODEL_NAME,
+        messages=message_history,
+        tools=AGENT_TOOLS,
+        reasoning_effort=REASONING_EFFORT,
+    )
 
-            completion = stream.get_final_completion()
 
-        if not completion.choices or len(completion.choices) == 0:
-            raise RuntimeError("no choices in response")
+def _render_events(events: Iterable[AgentEvent]) -> None:
+    """Print answer deltas as they arrive and ignore all other event types.
 
-        response = completion.choices[0].message
-        if not response.tool_calls:
-            break
+    Args:
+        events: Agent events to render in arrival order.
+    """
+    for event in events:
+        match event:
+            case AnswerDelta(text=text):
+                print(text, end="", flush=True)
+            case (
+                ReasoningSummary()
+                | ReasoningDelta()
+                | ToolCallStarted()
+                | ToolResult()
+                | TurnCompleted()
+            ):
+                continue
+            case unreachable:
+                assert_never(unreachable)
 
-        message_histry.append(
-            {
-                "role": "assistant",
-                "content": response.content,
-                "tool_calls": [
-                    {
-                        "id": tool_call.id,
-                        "function": tool_call.function.model_dump(exclude_none=True),
-                        "type": tool_call.type,
-                    }
-                    for tool_call in response.tool_calls
-                ],
-            }
-        )
-        for tool_call in response.tool_calls:
-            message_histry.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": execute_tool_call(
-                        tool_call.function.name, tool_call.function.arguments
-                    ),
-                }
-            )
+
+def main() -> None:
+    request = _configure_request()
+    client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
+    _render_events(run_agent(client, request))
 
 
 if __name__ == "__main__":
