@@ -1,3 +1,5 @@
+"""Function-tool schemas and local file operations for the agent."""
+
 import json
 from pathlib import Path
 
@@ -5,6 +7,7 @@ from openai.types.chat.chat_completion_tool_union_param import (
     ChatCompletionToolUnionParam,
 )
 
+# Keep these advertised names in sync with execute_tool_call's dispatch cases.
 AGENT_TOOLS: list[ChatCompletionToolUnionParam] = [
     {
         "type": "function",
@@ -83,6 +86,15 @@ AGENT_TOOLS: list[ChatCompletionToolUnionParam] = [
 
 
 def execute_tool_call(tool_name: str, raw_arguments: str) -> str:
+    """Decode arguments and dispatch supported calls to their file handlers.
+
+    Args:
+        tool_name: Name of the requested tool.
+        raw_arguments: JSON-encoded tool arguments from the model.
+
+    Returns:
+        Tool output or error text suitable for the model.
+    """
     try:
         arguments = json.loads(raw_arguments)
     except json.JSONDecodeError as e:
@@ -93,22 +105,27 @@ def execute_tool_call(tool_name: str, raw_arguments: str) -> str:
 
     match tool_name:
         case "read_file":
-            print("Using read_file Tool")
             return execute_read(arguments)
         case "write_file":
-            print("Using write_file Tool")
             return execute_write(arguments)
         case "edit_file":
-            print("Using edit_file Tool")
             return execute_edit(arguments)
         case "Bash":
+            # Unimplemented: this returns None; do not advertise Bash yet.
             pass
-            # return execute_bash(arguments)
         case _:
             return "error: unknown tool called"
 
 
 def execute_read(arguments) -> str:
+    """Read UTF-8 text while preserving the file's newline sequences.
+
+    Args:
+        arguments: Decoded tool arguments containing ``file_path``.
+
+    Returns:
+        File contents, or error text if the path or file cannot be read.
+    """
     raw_file_path = arguments.get("file_path")
 
     if not isinstance(raw_file_path, str) or not raw_file_path:
@@ -116,13 +133,22 @@ def execute_read(arguments) -> str:
 
     try:
         content = Path(raw_file_path).read_text(encoding="utf-8", newline="")
-        print(f"read {raw_file_path}")
         return content
     except (UnicodeError, OSError) as e:
         return f"error: {e}"
 
 
 def execute_write(arguments) -> str:
+    """Create parent directories and replace a UTF-8 file's contents.
+
+    Empty content is valid, and newline sequences are preserved.
+
+    Args:
+        arguments: Decoded tool arguments containing ``file_path`` and ``content``.
+
+    Returns:
+        A success message or error text if the arguments or file operation fail.
+    """
     raw_file_path = arguments.get("file_path")
     if not isinstance(raw_file_path, str) or not raw_file_path:
         return "error: file_path must be a non-empty string"
@@ -135,14 +161,25 @@ def execute_write(arguments) -> str:
         file_path = Path(raw_file_path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         chr_count = file_path.write_text(content, encoding="utf-8", newline="")
-        msg = f" written {chr_count} characters in {raw_file_path}"
-        print(msg)
+        msg = f"written {chr_count} characters in {raw_file_path}"
         return f"success: {msg}"
     except (UnicodeError, OSError) as e:
         return f"error: {e}"
 
 
 def execute_edit(arguments) -> str:
+    """Apply exact, non-overlapping replacements to one UTF-8 file.
+
+    Every ``oldText`` must occur exactly once in the original content. An empty
+    ``newText`` deletes a match. The file is written only after all edits pass
+    validation, and existing newline sequences are preserved.
+
+    Args:
+        arguments: Decoded tool arguments containing ``file_path`` and ``edits``.
+
+    Returns:
+        A success message or error text if validation or the file operation fails.
+    """
     raw_file_path = arguments.get("file_path")
     if not isinstance(raw_file_path, str) or not raw_file_path:
         return "error: file_path must be a non-empty string"
@@ -164,9 +201,9 @@ def execute_edit(arguments) -> str:
 
         old_text, new_text = edit.get("oldText"), edit.get("newText")
         if not isinstance(old_text, str) or not old_text:
-            return f"error: edit at index {i} - oldText must be a non-empty string"
+            return f"error: edit at index {i} - 'oldText' must be a non-empty string"
         if not isinstance(new_text, str):
-            return f"error: edit at index {i} - newText must be a string"
+            return f"error: edit at index {i} - 'newText' must be a string"
 
         start = content.find(old_text)
         if start == -1:
@@ -189,8 +226,6 @@ def execute_edit(arguments) -> str:
 
     try:
         file_path.write_text(content, encoding="utf-8", newline="")
-        msg = f" edited {len(edits)} text blocks in {raw_file_path}"
-        print(msg)
-        return f"success: {msg}"
+        return f"success: edited {len(edits)} text blocks in {raw_file_path}"
     except (UnicodeError, OSError) as e:
         return f"error: {e}"
