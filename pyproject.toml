@@ -33,8 +33,16 @@ dev = [
 testpaths = ["tests"]
 
 [tool.pyrefly]
-preset = "basic"
+preset = "strict"
 search-path = ["."]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "PTH", "ISC001", "ISC002", "ISC003"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["aashir", "tests"]

@@ -39,6 +39,7 @@ Aashir is an AI agent for software-engineering tasks. The idea of this project i
 - Before changing behavior, read the relevant tests and trace the affected callers. For a bug, reproduce it and fix the shared cause rather than patching only the reported path.
 - Use Python with type annotations. Annotate public and cross-module function parameters and return values, including explicit `-> None` and optional results such as `T | None`.
 - Prefer `X | Y` over `Union[X, Y]` and `Optional[X]`; use built-in generics such as `list` instead of `List`, and avoid `typing.Any` unless absolutely necessary.
+- Declare Python type aliases with the PEP 695 `type` statement (for example, `type AgentEvent = ...`), not a plain assignment.
 - Parse untrusted data at the boundary into an appropriate typed shape; avoid carrying raw dictionaries or `Any` through internal APIs.
 - Treat `cast()` and `# type: ignore` comments as exceptional: fix the type or dependency where possible, and explain any unavoidable workaround.
 - For closed enums and unions, prefer exhaustive `match` statements with `assert_never` where the project's Python version and type checker support it. Keep ordinary boolean and predicate checks as `if` statements.
@@ -49,6 +50,12 @@ Aashir is an AI agent for software-engineering tasks. The idea of this project i
 - Check installed SDK/type definitions or implementation to learn external API shapes; do not guess.
 - When accessing packaged resources, use `importlib.resources` rather than assuming resources are located beside the Python source file.
 - Use `dataclass` for configuration data when it fits.
+- Choose Pydantic and dataclasses by the behavior a value needs; neither is a blanket replacement for the other:
+  - Prefer `pydantic.BaseModel` for structured input or output contracts that need runtime parsing/validation, Pydantic serialization, or generated JSON Schema. Use `TypeAdapter` when validating, serializing, or generating a schema for an existing type is simpler than adding a `BaseModel`.
+  - Prefer standard-library dataclasses for in-process values when static typing and explicit invariants are sufficient. Keep a useful Pydantic model after boundary validation; do not convert models or create duplicate wire/domain types solely for stylistic consistency.
+  - Validate untrusted data at meaningful boundaries. Configure coercion/strictness, handling of extra fields, and assignment validation intentionally; a Pydantic model or JSON Schema alone is not proof that data has been validated.
+  - Use `frozen=True` when field reassignment should be disallowed, remembering that it does not make nested lists or dictionaries immutable. Use `slots=True` when preventing arbitrary per-instance attributes or reducing instance memory is useful.
+  - Keep raised/caught errors as `Exception` subclasses, not Pydantic data models. Treat changes to exported data types as intentional API changes.
 - Prefer immutable value and configuration objects; make mutability explicit when it is part of the object's purpose.
 - Keep code comments to a minimum; use them to explain non-obvious or particularly challenging logic.
 - Do not catch exceptions merely to suppress them. Not every exception has to be caught; let unexpected failures propagate. Catch narrowly only when the code has a defined recovery, needs to provide useful error context, or must return a defined tool/protocol error. Do not add broad catches that hide provider or runtime failures.
@@ -102,12 +109,13 @@ The following rules state stable safety requirements for Aashir; platform-specif
 - For `pytest.mark.parametrize`, use a tuple for the first argument and a list for the cases in the second argument.
 - Prefer direct assertions for simple one-off calls. Use a named result when it improves clarity, reuse, failure diagnostics, or a multi-part assertion.
 - If you create or modify a test file, run that file with `uv run pytest path/to/test_file.py` from the repository root and iterate until it passes. When changing behavior, run affected tests and verify relevant observable results, protocol behavior, failure cases, and side effects.
-- After code changes (not documentation-only changes), run `uv run ruff check .` and `uv run pyrefly check` from the repository root. Inspect their full output and fix all findings. At roadmap phase exit, also run the full test, lint, and type-check commands:
+- After code changes (not documentation-only changes), run `uv run ruff check .`, `uv run pyrefly check`, and `uv run pyrefly coverage check` from the repository root. Inspect their full output and fix all findings. At roadmap phase exit, also run the full test, lint, and type-check commands:
 
   ```sh
   uv run pytest
   uv run ruff check .
   uv run pyrefly check
+  uv run pyrefly coverage check
   ```
 
 - Do not claim tests or checks passed unless they were run and passed. Report checks that could not be run.
