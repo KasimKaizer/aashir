@@ -4,6 +4,7 @@ import json
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import override
 
 import httpx2
 import pytest
@@ -15,7 +16,7 @@ from aashir.agent import (
     ProviderError,
     ReasoningDelta,
     ReasoningSummary,
-    ToolCallStarted,
+    ToolCallReceived,
     ToolResult,
     TurnCompleted,
 )
@@ -37,6 +38,7 @@ from aashir.agent import (
 )
 def test_main_reports_missing_settings_when_required_values_are_unset_or_empty(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
     api_key: str | None,
     base_url: str,
     model_name: str | None,
@@ -45,18 +47,42 @@ def test_main_reports_missing_settings_when_required_values_are_unset_or_empty(
 ) -> None:
     # Given: incomplete required settings and a valid prompt argument.
     monkeypatch.setattr(sys, "argv", ["aashir", "-p", "hello"])
-    monkeypatch.setattr(cli, "API_KEY", api_key)
-    monkeypatch.setattr(cli, "BASE_URL", base_url)
-    monkeypatch.setattr(cli, "MODEL_NAME", model_name)
-    monkeypatch.setattr(cli, "SYSTEM_PROMPT", "prompt.txt")
-    monkeypatch.setattr(cli, "REASONING_EFFORT", reasoning_effort)
+    monkeypatch.setenv("OPENAI_API_KEY", api_key or "")
+    monkeypatch.setenv("OPENAI_BASE_URL", base_url)
+    monkeypatch.setenv("BASE_MODEL_NAME", model_name or "")
+    monkeypatch.setenv("SYSTEM_PROMPT_FILE", "prompt.txt")
+    monkeypatch.setenv("REASONING_EFFORT", reasoning_effort or "")
 
     # When: the CLI validates its configuration.
-    with pytest.raises(RuntimeError) as error:
+    with pytest.raises(SystemExit) as error:
         cli.main()
 
-    # Then: all missing settings are named in configuration order.
-    assert str(error.value) == f"Missing required variables: {expected_missing}"
+    # Then: it reports all missing settings and exits with a usage-error status.
+    assert error.value.code == 2
+    assert capsys.readouterr().err == (
+        f"error: Missing required variables: {expected_missing}\n"
+    )
+
+
+def test_main_reports_unsupported_reasoning_effort_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Given: complete settings with an unsupported reasoning-effort value.
+    monkeypatch.setattr(sys, "argv", ["aashir", "-p", "hello"])
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("BASE_MODEL_NAME", "test-model")
+    monkeypatch.setenv("SYSTEM_PROMPT_FILE", "")
+    monkeypatch.setenv("REASONING_EFFORT", "unsupported")
+
+    # When: the CLI validates its configuration.
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+
+    # Then: it reports the invalid setting without a traceback.
+    assert error.value.code == 2
+    assert capsys.readouterr().err.startswith("error: Invalid REASONING_EFFORT")
 
 
 @pytest.mark.parametrize(
@@ -77,26 +103,27 @@ def test_configure_request_uses_default_prompt_without_nonempty_custom_file(
 ) -> None:
     # Given: valid settings with no prompt, a missing file, or an empty file.
     monkeypatch.setattr(sys, "argv", ["aashir", "-p", "hello"])
-    monkeypatch.setattr(cli, "API_KEY", "test-key")
-    monkeypatch.setattr(cli, "BASE_URL", "https://example.invalid/v1")
-    monkeypatch.setattr(cli, "MODEL_NAME", "test-model")
-    monkeypatch.setattr(cli, "REASONING_EFFORT", "medium")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("BASE_MODEL_NAME", "test-model")
+    monkeypatch.setenv("REASONING_EFFORT", "medium")
     prompt_file = None if prompt_path is None else tmp_path / prompt_path
     if prompt_file is not None and prompt_content is not None:
         prompt_file.write_text(prompt_content, encoding="utf-8")
-    system_prompt = None if prompt_file is None else str(prompt_file)
-    monkeypatch.setattr(cli, "SYSTEM_PROMPT", system_prompt)
+    system_prompt = "" if prompt_file is None else str(prompt_file)
+    monkeypatch.setenv("SYSTEM_PROMPT_FILE", system_prompt)
 
-    # When: the CLI builds its agent request.
-    request = cli._configure_request()
+    # When: the CLI builds its agent request from the current settings.
+    request = cli._configure_request(cli._load_settings())
 
     # Then: it uses the built-in prompt and warns only when reading fails.
     assert request.messages[0] == {
         "role": "system",
         "content": "You are a helpful assistant.",
     }
-    warning = capsys.readouterr().out
-    assert warning.startswith("warn:") is warning_expected
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("warn:") is warning_expected
 
 
 def test_main_requires_prompt_argument_when_option_is_omitted(
@@ -145,17 +172,17 @@ def _chunk(
 @pytest.fixture
 def mock_streaming_api(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> Callable[[httpx2.SyncByteStream], None]:
+) -> Callable[[httpx2.SyncByteStream], httpx2.Client]:
     monkeypatch.setattr(sys, "argv", ["aashir", "-p", "hello"])
-    monkeypatch.setattr(cli, "API_KEY", "test-key")
-    monkeypatch.setattr(cli, "BASE_URL", "https://example.invalid/v1")
-    monkeypatch.setattr(cli, "MODEL_NAME", "test-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("BASE_MODEL_NAME", "test-model")
     prompt_file = tmp_path / "prompt.txt"
     prompt_file.write_text("You are a test assistant.", encoding="utf-8")
-    monkeypatch.setattr(cli, "SYSTEM_PROMPT", str(prompt_file))
-    monkeypatch.setattr(cli, "REASONING_EFFORT", "medium")
+    monkeypatch.setenv("SYSTEM_PROMPT_FILE", str(prompt_file))
+    monkeypatch.setenv("REASONING_EFFORT", "medium")
 
-    def install(stream: httpx2.SyncByteStream) -> None:
+    def install(stream: httpx2.SyncByteStream) -> httpx2.Client:
         def respond(_request: httpx2.Request) -> httpx2.Response:
             return httpx2.Response(
                 200,
@@ -163,17 +190,39 @@ def mock_streaming_api(
                 stream=stream,
             )
 
+        http_client = httpx2.Client(transport=httpx2.MockTransport(respond))
+
         def make_client(*, api_key: str, base_url: str) -> OpenAI:
             return OpenAI(
                 api_key=api_key,
                 base_url=base_url,
                 max_retries=0,
-                http_client=httpx2.Client(transport=httpx2.MockTransport(respond)),
+                http_client=http_client,
             )
 
         monkeypatch.setattr(cli, "OpenAI", make_client)
+        return http_client
 
     return install
+
+
+def test_main_closes_http_client_after_streaming(
+    mock_streaming_api: Callable[[httpx2.SyncByteStream], httpx2.Client],
+) -> None:
+    # Given: a successful provider stream and its underlying HTTP client.
+    http_client = mock_streaming_api(
+        httpx2.ByteStream(_chunk("Done", finish_reason="stop") + b"data: [DONE]\n\n")
+    )
+
+    # When: the CLI consumes the complete stream.
+    try:
+        cli.main()
+    finally:
+        client_was_closed = http_client.is_closed
+        http_client.close()
+
+    # Then: the CLI closes the HTTP client after the run.
+    assert client_was_closed
 
 
 def test_main_prints_answer_before_stream_finishes_when_provider_sends_chunks(
@@ -184,6 +233,7 @@ def test_main_prints_answer_before_stream_finishes_when_provider_sends_chunks(
     observed_before_finish: list[str] = []
 
     class StreamingBody(httpx2.SyncByteStream):
+        @override
         def __iter__(self) -> Iterator[bytes]:
             yield _chunk("Hel")
             observed_before_finish.append(capsys.readouterr().out)
@@ -245,7 +295,7 @@ def test_render_events_prints_only_answer_text(
         AnswerDelta(text="Hel"),
         ReasoningDelta(text="raw reasoning"),
         ReasoningSummary(text="should-hide"),
-        ToolCallStarted(call_id="c1", name="example_tool", arguments="{}"),
+        ToolCallReceived(call_id="c1", name="example_tool", arguments="{}"),
         ToolResult(call_id="c1", name="example_tool", output="file-bytes"),
         AnswerDelta(text="lo"),
         TurnCompleted(),

@@ -2,7 +2,11 @@
 
 from dataclasses import dataclass
 
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolUnionParam
+from openai.types.chat import (
+    ChatCompletionMessageParam,
+    ChatCompletionReasoningEffort,
+    ChatCompletionToolUnionParam,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,7 +16,7 @@ class AgentRequest:
     model: str
     messages: list[ChatCompletionMessageParam]
     tools: list[ChatCompletionToolUnionParam] | None = None
-    reasoning_effort: str | None = None
+    reasoning_effort: ChatCompletionReasoningEffort = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,8 +41,8 @@ class ReasoningSummary:
 
 
 @dataclass(frozen=True, slots=True)
-class ToolCallStarted:
-    """A complete, validated tool call immediately before execution."""
+class ToolCallReceived:
+    """A provider tool call received before validation or execution."""
 
     call_id: str
     name: str
@@ -59,10 +63,10 @@ class TurnCompleted:
     """Marks a successful assistant completion with no further tool calls."""
 
 
-AgentEvent = (
+type AgentEvent = (
     TurnCompleted
     | ToolResult
-    | ToolCallStarted
+    | ToolCallReceived
     | ReasoningSummary
     | AnswerDelta
     | ReasoningDelta

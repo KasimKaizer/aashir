@@ -6,7 +6,7 @@ from aashir.agent.contracts import (
     AnswerDelta,
     ReasoningDelta,
     ReasoningSummary,
-    ToolCallStarted,
+    ToolCallReceived,
     ToolResult,
     TurnCompleted,
 )
@@ -21,7 +21,7 @@ __all__ = [
     "ProviderErrorCategory",
     "ReasoningDelta",
     "ReasoningSummary",
-    "ToolCallStarted",
+    "ToolCallReceived",
     "ToolResult",
     "TurnCompleted",
     "run_agent",

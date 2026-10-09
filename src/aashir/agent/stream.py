@@ -3,7 +3,7 @@
 from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 
-from openai import OpenAI
+from openai import OpenAI, omit
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 
@@ -42,6 +42,8 @@ def _events_from_delta(delta: ChoiceDelta) -> Iterator[AgentEvent]:
     if not delta.model_extra:
         return
 
+    # Prefer `reasoning`, then `reasoning_content`; details text is fallback only.
+    # Summary details remain independent of this raw-reasoning choice.
     reasoning = delta.model_extra.get("reasoning")
     has_raw_reasoning: bool = False
     if not isinstance(reasoning, str) or not reasoning:
@@ -93,11 +95,6 @@ def _stream_completion(
     `_StreamedCompletion` returned when this stream ends. SDK errors propagate for
     normalization by `run_agent`.
     """
-    params = {}
-    if request.reasoning_effort:
-        params["reasoning_effort"] = request.reasoning_effort
-    if request.tools:
-        params["tools"] = request.tools
 
     tool_calls: dict[int, _ToolCallAccumulator] = {}
     answer_parts: list[str] = []
@@ -105,7 +102,13 @@ def _stream_completion(
     finish_reason: str | None = None
 
     with client.chat.completions.create(
-        model=request.model, messages=history, stream=True, **params
+        model=request.model,
+        messages=history,
+        stream=True,
+        reasoning_effort=(
+            request.reasoning_effort if request.reasoning_effort else omit
+        ),
+        tools=request.tools if request.tools else omit,
     ) as stream:
         for event in stream:
             if not event.choices:
@@ -124,6 +127,8 @@ def _stream_completion(
                 accumulator = tool_calls.setdefault(
                     tool_call_delta.index, _ToolCallAccumulator()
                 )
+                # TODO: Verify whether provider ID/name fields are fragments or full
+                # values; handle each format according to the provider's contract.
                 if tool_call_delta.id:
                     accumulator.call_id += tool_call_delta.id
                 if tool_call_delta.function:

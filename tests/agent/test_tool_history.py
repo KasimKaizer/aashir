@@ -9,7 +9,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from aashir.agent import (
     AgentRequest,
     AnswerDelta,
-    ToolCallStarted,
+    ToolCallReceived,
     ToolResult,
     TurnCompleted,
     run_agent,
@@ -86,17 +86,17 @@ def test_run_agent_preserves_tool_history_and_emits_lifecycle_events_in_order(
 
     # Then: each call has a matching result before the turn completes.
     tool_events = [
-        event for event in events if isinstance(event, (ToolCallStarted, ToolResult))
+        event for event in events if isinstance(event, (ToolCallReceived, ToolResult))
     ]
     assert [(type(event), event.call_id) for event in tool_events] == [
-        (ToolCallStarted, "call_tool"),
+        (ToolCallReceived, "call_tool"),
         (ToolResult, "call_tool"),
-        (ToolCallStarted, "call_unknown"),
+        (ToolCallReceived, "call_unknown"),
         (ToolResult, "call_unknown"),
     ]
     assert isinstance(events[-1], TurnCompleted)
 
-    started = [event for event in events if isinstance(event, ToolCallStarted)]
+    started = [event for event in events if isinstance(event, ToolCallReceived)]
     assert [(event.call_id, event.name) for event in started] == [
         ("call_tool", "read_file"),
         ("call_unknown", "unknown_tool"),
@@ -204,12 +204,12 @@ def test_run_agent_assembles_fragmented_interleaved_tool_calls_in_completion_ord
 
     # Then: calls execute in index order, with each start before its result.
     tool_events = [
-        event for event in events if isinstance(event, (ToolCallStarted, ToolResult))
+        event for event in events if isinstance(event, (ToolCallReceived, ToolResult))
     ]
     assert [(type(event), event.call_id) for event in tool_events] == [
-        (ToolCallStarted, "call_0"),
+        (ToolCallReceived, "call_0"),
         (ToolResult, "call_0"),
-        (ToolCallStarted, "call_1"),
+        (ToolCallReceived, "call_1"),
         (ToolResult, "call_1"),
     ]
     assert isinstance(events[-1], TurnCompleted)

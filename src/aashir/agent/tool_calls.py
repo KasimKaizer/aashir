@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from openai.types.chat import ChatCompletionMessageParam
 
-from aashir.agent.contracts import AgentEvent, ToolCallStarted, ToolResult
+from aashir.agent.contracts import AgentEvent, ToolCallReceived, ToolResult
 from aashir.tools import execute_tool_call
 
 
@@ -36,11 +36,13 @@ def _execute_tool_calls(
     """
     seen_call_ids: set[str] = set()
     for tool_call in tool_calls:
-        yield ToolCallStarted(
+        yield ToolCallReceived(
             call_id=tool_call.call_id,
             name=tool_call.name,
             arguments=tool_call.arguments,
         )
+        # TODO: Verify how supported providers handle missing or duplicate tool-call IDs.
+        # Adjust follow-up handling if any provider rejects this history.
         if not tool_call.call_id or not tool_call.name or not tool_call.arguments:
             content = "error: incomplete tool call in response"
         elif tool_call.call_id in seen_call_ids:

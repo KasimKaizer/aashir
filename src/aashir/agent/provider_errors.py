@@ -1,7 +1,7 @@
 """Provider error types and normalization for the agent boundary."""
 
 from dataclasses import dataclass
-from typing import Literal, assert_never
+from typing import Literal, assert_never, override
 
 from openai import (
     APIConnectionError,
@@ -32,6 +32,7 @@ class ProviderError(Exception):
     error_type: str | None
     message: str
 
+    @override
     def __str__(self) -> str:
         return self.message
 

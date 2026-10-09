@@ -1,8 +1,10 @@
 from collections.abc import Iterator
+from typing import override
 
 import httpx2
 import pytest
 from openai import APIError
+from openai.types.chat import ChatCompletionReasoningEffort
 
 from aashir.agent import (
     AgentEvent,
@@ -23,6 +25,7 @@ def test_run_agent_yields_answer_deltas_before_provider_stream_finishes() -> Non
     consumed: list[str] = []
 
     class StreamingBody(httpx2.SyncByteStream):
+        @override
         def __iter__(self) -> Iterator[bytes]:
             consumed.append("first")
             yield sse_chunk({"content": "Hel"})
@@ -54,7 +57,7 @@ def test_run_agent_yields_answer_deltas_before_provider_stream_finishes() -> Non
 
 @pytest.mark.parametrize("reasoning_effort", [None, "medium"])
 def test_run_agent_does_not_fabricate_reasoning_when_provider_omits_it(
-    reasoning_effort: str | None,
+    reasoning_effort: ChatCompletionReasoningEffort,
 ) -> None:
     # Given: a plain answer stream with no reasoning payload.
     body = sse_chunk({"content": "Hello"}, finish_reason="stop")
@@ -97,7 +100,7 @@ def test_run_agent_yields_partial_deltas_then_raises_normalized_provider_error()
     )
 
     # When: the consumer iterates the stream.
-    seen: list[AnswerDelta | ReasoningDelta | ReasoningSummary | TurnCompleted] = []
+    seen: list[AgentEvent] = []
     with pytest.raises(ProviderError, match="stream failed") as error:
         for event in events:
             seen.append(event)  # noqa: PERF402 -- retain partial events before the exception
@@ -187,7 +190,7 @@ def test_run_agent_normalizes_unknown_finish_reason() -> None:
         make_openai_client(httpx2.ByteStream(body)),
         AgentRequest(model="test-model", messages=[{"role": "user", "content": "hi"}]),
     )
-    seen: list[AnswerDelta | ReasoningDelta | ReasoningSummary | TurnCompleted] = []
+    seen: list[AgentEvent] = []
 
     # When: the consumer iterates the provider stream.
     with pytest.raises(ProviderError) as error:

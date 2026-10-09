@@ -19,7 +19,7 @@ from aashir.agent import (
     AnswerDelta,
     ProviderError,
     ReasoningDelta,
-    ToolCallStarted,
+    ToolCallReceived,
     ToolResult,
     TurnCompleted,
     run_agent,
@@ -161,7 +161,7 @@ def test_run_agent_does_not_execute_tool_calls_without_tool_calls_finish_reason(
     # Then: the call is rejected before it is announced or executed.
     assert error.value.category == "protocol"
     assert not any(
-        isinstance(event, (ToolCallStarted, ToolResult, TurnCompleted))
+        isinstance(event, (ToolCallReceived, ToolResult, TurnCompleted))
         for event in events
     )
 

@@ -31,6 +31,8 @@ def run_agent(client: OpenAI, request: AgentRequest) -> Iterator[AgentEvent]:
     """
     history: list[ChatCompletionMessageParam] = list(request.messages)
 
+    # TODO: Decide whether to enforce a whole-run wall-clock limit and what it should be.
+    # 30 minutes is one candidate, not a settled default.
     while True:
         try:
             completion = yield from _stream_completion(client, request, history)
@@ -80,7 +82,7 @@ def run_agent(client: OpenAI, request: AgentRequest) -> Iterator[AgentEvent]:
                     message=f"completion did not finish successfully: {unknown_finish_reason!r}",
                 )
 
-        # Reasoning stays on the event stream; only tool protocol messages enter history.
+        # Reasoning stays on the event stream; only agent response and tool protocol messages enter history.
         history.append(
             {
                 "role": "assistant",
@@ -98,4 +100,6 @@ def run_agent(client: OpenAI, request: AgentRequest) -> Iterator[AgentEvent]:
                 ],
             }
         )
+        # TODO: Consider whether to check calls against request.tools before dispatch;
+        # the current loop executes any tool call returned by the provider.
         yield from _execute_tool_calls(completion.tool_calls, history)

@@ -21,11 +21,11 @@ def run_tool_round_trip(
     prompt_file = tmp_path / "prompt.txt"
     prompt_file.write_text("You are a test assistant.", encoding="utf-8")
     monkeypatch.setattr(sys, "argv", ["aashir", "-p", "use a tool"])
-    monkeypatch.setattr(cli, "API_KEY", "test-key")
-    monkeypatch.setattr(cli, "BASE_URL", "https://example.invalid/v1")
-    monkeypatch.setattr(cli, "MODEL_NAME", "test-model")
-    monkeypatch.setattr(cli, "SYSTEM_PROMPT", str(prompt_file))
-    monkeypatch.setattr(cli, "REASONING_EFFORT", "medium")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("BASE_MODEL_NAME", "test-model")
+    monkeypatch.setenv("SYSTEM_PROMPT_FILE", str(prompt_file))
+    monkeypatch.setenv("REASONING_EFFORT", "medium")
 
     def run(tool_name: str, arguments: str) -> tuple[httpx2.Request, httpx2.Request]:
         tool_delta = {
