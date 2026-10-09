@@ -1,0 +1,155 @@
+"""Tool dispatch and local file operations for the agent."""
+
+from pathlib import Path
+
+from pydantic import ValidationError
+
+from aashir.tools.schemas import (
+    EditFileArguments,
+    ReadFileArguments,
+    WriteFileArguments,
+)
+
+
+def _validation_error_message(error: ValidationError) -> str:
+    """Format validation errors without echoing the invalid input."""
+    issue = error.errors(include_input=False)[0]
+    match issue["loc"]:
+        case ("file_path",):
+            message = "file_path must be a non-empty string"
+        case ("content",):
+            message = "content must be a string"
+        case ("edits",):
+            message = "edits must be a non-empty list"
+        case ("edits", index):
+            message = f"edit at index {index} must be a dict"
+        case ("edits", index, "old_text"):
+            message = f"edit at index {index} - 'old_text' must be a non-empty string"
+        case ("edits", index, "new_text"):
+            message = f"edit at index {index} - 'new_text' must be a string"
+        case location:
+            location_text = ".".join(str(part) for part in location) or "arguments"
+            message = f"invalid arguments at {location_text}: {issue['msg']}"
+    return f"error: {message}"
+
+
+def execute_tool_call(tool_name: str, raw_arguments: str) -> str:
+    """Validate JSON arguments and dispatch supported calls to file handlers.
+
+    Args:
+        tool_name: Name of the requested tool.
+        raw_arguments: JSON-encoded tool arguments from the model.
+
+    Returns:
+        Tool output or error text suitable for the model.
+    """
+    # TODO: Decide whether file tools need a workspace boundary; paths are currently
+    # used directly, including absolute paths and paths that resolve through symlinks.
+    try:
+        match tool_name:
+            case "read_file":
+                arguments = ReadFileArguments.model_validate_json(raw_arguments)
+                return execute_read(arguments)
+            case "write_file":
+                arguments = WriteFileArguments.model_validate_json(raw_arguments)
+                return execute_write(arguments)
+            case "edit_file":
+                arguments = EditFileArguments.model_validate_json(raw_arguments)
+                return execute_edit(arguments)
+            case "Bash":
+                return "error: not implemented yet"
+            case _:
+                return "error: unknown tool called"
+    except ValidationError as error:
+        return _validation_error_message(error)
+
+
+def execute_read(arguments: ReadFileArguments) -> str:
+    """Read UTF-8 text while preserving the file's newline sequences.
+
+    Args:
+        arguments: Validated tool arguments containing ``file_path``.
+
+    Returns:
+        File contents, or error text if the path or file cannot be read.
+    """
+    try:
+        return Path(arguments.file_path).read_text(encoding="utf-8", newline="")
+    except (UnicodeError, OSError) as error:
+        return f"error: {error}"
+
+
+# TODO: Consider same-directory temporary files and atomic replacement for both file
+# writing tools; decide how permissions and symlinks should behave first.
+def execute_write(arguments: WriteFileArguments) -> str:
+    """Create parent directories and replace a UTF-8 file's contents.
+
+    Empty content is valid, and newline sequences are preserved.
+
+    Args:
+        arguments: Validated file path and content.
+
+    Returns:
+        A success message or error text if validation or the file operation fails.
+    """
+    try:
+        file_path = Path(arguments.file_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        character_count = file_path.write_text(
+            arguments.content, encoding="utf-8", newline=""
+        )
+        message = f"written {character_count} characters in {arguments.file_path}"
+        return f"success: {message}"
+    except (UnicodeError, OSError) as error:
+        return f"error: {error}"
+
+
+def execute_edit(arguments: EditFileArguments) -> str:
+    """Apply exact, non-overlapping replacements to one UTF-8 file.
+
+    Every ``old_text`` must occur exactly once in the original content. An empty
+    ``new_text`` deletes a match. The file is written only after all edits pass
+    validation, and existing newline sequences are preserved.
+
+    Args:
+        arguments: Validated file path and edit list.
+
+    Returns:
+        A success message or error text if validation or the file operation fails.
+    """
+    try:
+        file_path = Path(arguments.file_path)
+        content = file_path.read_text(encoding="utf-8", newline="")
+    except (UnicodeError, OSError) as error:
+        return f"error: {error}"
+
+    spans: list[tuple[int, int, str]] = []
+    for index, edit in enumerate(arguments.edits):
+        old_text, new_text = edit.old_text, edit.new_text
+        start = content.find(old_text)
+        if start == -1:
+            return f"error: edit at index {index} - 'old_text' not found in the file"
+        if content.find(old_text, start + 1) != -1:
+            return (
+                f"error: edit at index {index} - 'old_text' is found more than once "
+                "in the file"
+            )
+        end = start + len(old_text)
+        spans.append((start, end, new_text))
+
+    # Sort edits by their start position in the original content.
+    ordered_spans = sorted(spans, key=lambda span: span[0])
+    pointer = 0
+    parts: list[str] = []
+    for start, end, new_text in ordered_spans:
+        if pointer > start:
+            return f"error: overlapping edit at position {pointer}"
+        parts.extend((content[pointer:start], new_text))
+        pointer = end
+    content = "".join((*parts, content[pointer:]))
+
+    try:
+        file_path.write_text(content, encoding="utf-8", newline="")
+        return f"success: edited {len(arguments.edits)} text blocks in {arguments.file_path}"
+    except (UnicodeError, OSError) as error:
+        return f"error: {error}"

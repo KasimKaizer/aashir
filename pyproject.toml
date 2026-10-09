@@ -8,8 +8,9 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
-    "dotenv>=0.9.9",
+    "python-dotenv>=1.2.3",
     "openai>=3.19.0",
+    "pydantic>=2.13.5",
 ]
 
 [project.scripts]

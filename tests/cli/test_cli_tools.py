@@ -90,20 +90,27 @@ def test_main_sends_configured_request_and_advertises_tools(
     }
     assert initial_messages[-1] == {"role": "user", "content": "use a tool"}
 
-    edit_function = next(
-        tool["function"]
+    tool_parameters = {
+        tool["function"]["name"]: tool["function"]["parameters"]
         for tool in initial_payload["tools"]
-        if tool["function"]["name"] == "edit_file"
-    )
-    parameters = edit_function["parameters"]
+    }
+    for tool_name in ("read_file", "write_file", "edit_file"):
+        assert tool_parameters[tool_name]["properties"]["file_path"]["minLength"] == 1
+
+    parameters = tool_parameters["edit_file"]
+    assert parameters["additionalProperties"] is False
     assert {"file_path", "edits"} <= set(parameters["required"])
     assert parameters["properties"]["file_path"]["type"] == "string"
     edits_schema = parameters["properties"]["edits"]
     assert edits_schema["type"] == "array"
-    edit_schema = edits_schema["items"]
-    assert {"oldText", "newText"} <= set(edit_schema["required"])
-    assert edit_schema["properties"]["oldText"]["type"] == "string"
-    assert edit_schema["properties"]["newText"]["type"] == "string"
+    assert edits_schema["minItems"] == 1
+    assert edits_schema["items"]["$ref"] == "#/$defs/TextEdit"
+    edit_schema = parameters["$defs"]["TextEdit"]
+    assert edit_schema["additionalProperties"] is False
+    assert {"old_text", "new_text"} <= set(edit_schema["required"])
+    assert edit_schema["properties"]["old_text"]["type"] == "string"
+    assert edit_schema["properties"]["old_text"]["minLength"] == 1
+    assert edit_schema["properties"]["new_text"]["type"] == "string"
 
     # Then: a missing-file tool error is returned to the provider.
     tool_result = json.loads(follow_up_request.content)["messages"][-1]

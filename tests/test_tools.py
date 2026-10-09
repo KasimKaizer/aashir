@@ -113,8 +113,8 @@ def test_edit_file_applies_original_matches_and_allows_deletion(
         {
             "file_path": str(path),
             "edits": [
-                {"oldText": "title=café", "newText": "status=ready"},
-                {"oldText": "status=ready", "newText": ""},
+                {"old_text": "title=café", "new_text": "status=ready"},
+                {"old_text": "status=ready", "new_text": ""},
             ],
         }
     )
@@ -134,7 +134,7 @@ def test_edit_file_preserves_crlf_line_endings(tmp_path: Path) -> None:
     arguments = json.dumps(
         {
             "file_path": str(path),
-            "edits": [{"oldText": "target=old", "newText": "target=new"}],
+            "edits": [{"old_text": "target=old", "new_text": "target=new"}],
         }
     )
 
@@ -157,8 +157,8 @@ def test_edit_file_rejects_missing_match_without_partially_writing(
         {
             "file_path": str(path),
             "edits": [
-                {"oldText": "alpha", "newText": "A"},
-                {"oldText": "missing", "newText": "M"},
+                {"old_text": "alpha", "new_text": "A"},
+                {"old_text": "missing", "new_text": "M"},
             ],
         }
     )
@@ -174,13 +174,13 @@ def test_edit_file_rejects_missing_match_without_partially_writing(
 @pytest.mark.parametrize(
     ("original", "edits"),
     [
-        ("repeat repeat", [{"oldText": "repeat", "newText": "once"}]),
-        ("banana", [{"oldText": "ana", "newText": "X"}]),
+        ("repeat repeat", [{"old_text": "repeat", "new_text": "once"}]),
+        ("banana", [{"old_text": "ana", "new_text": "X"}]),
         (
             "abcdef",
             [
-                {"oldText": "abc", "newText": "abc"},
-                {"oldText": "cde", "newText": "Y"},
+                {"old_text": "abc", "new_text": "abc"},
+                {"old_text": "cde", "new_text": "Y"},
             ],
         ),
     ],
@@ -211,7 +211,7 @@ def test_edit_file_returns_write_error_without_changing_file(
     arguments = json.dumps(
         {
             "file_path": str(path),
-            "edits": [{"oldText": "before", "newText": "after"}],
+            "edits": [{"old_text": "before", "new_text": "after"}],
         }
     )
 
@@ -235,7 +235,7 @@ def test_edit_file_does_not_create_a_missing_file(tmp_path: Path) -> None:
     arguments = json.dumps(
         {
             "file_path": str(path),
-            "edits": [{"oldText": "before", "newText": "after"}],
+            "edits": [{"old_text": "before", "new_text": "after"}],
         }
     )
 
@@ -253,12 +253,12 @@ def test_edit_file_does_not_create_a_missing_file(tmp_path: Path) -> None:
         ([], "error: edits must be a non-empty list"),
         ([None], "error: edit at index 0 must be a dict"),
         (
-            [{"oldText": "before", "newText": None}],
-            "error: edit at index 0 - 'newText' must be a string",
+            [{"old_text": "before", "new_text": None}],
+            "error: edit at index 0 - 'new_text' must be a string",
         ),
         (
-            [{"oldText": "", "newText": "insert"}],
-            "error: edit at index 0 - 'oldText' must be a non-empty string",
+            [{"old_text": "", "new_text": "insert"}],
+            "error: edit at index 0 - 'old_text' must be a non-empty string",
         ),
     ],
 )
@@ -288,7 +288,7 @@ def test_edit_file_rejects_invalid_edits_without_writing(
         ("write_file", {"file_path": "", "content": "ignored"}),
         (
             "edit_file",
-            {"file_path": "", "edits": [{"oldText": "before", "newText": "after"}]},
+            {"file_path": "", "edits": [{"old_text": "before", "new_text": "after"}]},
         ),
     ],
 )
@@ -320,3 +320,43 @@ def test_write_file_returns_error_when_parent_path_is_a_file(tmp_path: Path) -> 
     # Then: it returns the I/O error and leaves the existing file unchanged.
     assert result.startswith("error:")
     assert parent.read_text(encoding="utf-8") == "keep"
+
+
+def test_write_file_rejects_unrecognized_arguments_before_creating_file(
+    tmp_path: Path,
+) -> None:
+    # Given: a valid write request with an unexpected argument.
+    path = tmp_path / "note.txt"
+    arguments = json.dumps(
+        {"file_path": str(path), "content": "new", "unexpected": "value"}
+    )
+
+    # When: the tool parses the request.
+    result = execute_tool_call("write_file", arguments)
+
+    # Then: the extra field is rejected without echoing its value or creating the file.
+    assert result.startswith("error:")
+    assert "value" not in result
+    assert not path.exists()
+
+
+def test_edit_file_rejects_unrecognized_edit_fields_without_writing(
+    tmp_path: Path,
+) -> None:
+    # Given: an existing file and an edit containing an unexpected field.
+    path = tmp_path / "note.txt"
+    original = "before"
+    path.write_text(original, encoding="utf-8")
+    arguments = json.dumps(
+        {
+            "file_path": str(path),
+            "edits": [{"old_text": "before", "new_text": "after", "unexpected": "value"}],
+        }
+    )
+
+    # When: the tool parses the request.
+    result = execute_tool_call("edit_file", arguments)
+
+    # Then: the extra field is rejected before the file is changed.
+    assert result.startswith("error:")
+    assert path.read_text(encoding="utf-8") == original

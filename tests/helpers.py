@@ -1,32 +1,41 @@
 """Shared provider-stream helpers for agent and CLI tests."""
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+from typing import Final
 
 import httpx2
 from openai import APIError, OpenAI
+from pydantic import JsonValue, TypeAdapter
 
-type JsonValue = (
-    str | int | float | bool | None | Sequence[JsonValue] | Mapping[str, JsonValue]
+_JSON_OBJECT: Final[TypeAdapter[dict[str, JsonValue]]] = TypeAdapter(
+    dict[str, JsonValue]
 )
 
 
-def sse_chunk(
-    delta: Mapping[str, JsonValue],
+def sse_chunk[DeltaValue, ErrorValue](
+    delta: Mapping[str, DeltaValue],
     *,
     finish_reason: str | None = None,
-    error: Mapping[str, JsonValue] | None = None,
+    error: Mapping[str, ErrorValue] | None = None,
 ) -> bytes:
     """Encode one chat-completion SSE chunk with an optional provider error."""
-    payload = {
+    json_delta = _JSON_OBJECT.validate_python(dict(delta), strict=True)
+    payload: dict[str, JsonValue] = {
         "id": "chatcmpl-test",
         "object": "chat.completion.chunk",
         "created": 0,
         "model": "test-model",
-        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        "choices": [
+            {
+                "index": 0,
+                "delta": json_delta,
+                "finish_reason": finish_reason,
+            }
+        ],
     }
     if error is not None:
-        payload["error"] = error
+        payload["error"] = _JSON_OBJECT.validate_python(dict(error), strict=True)
     return f"data: {json.dumps(payload)}\n\n".encode()
 
 
