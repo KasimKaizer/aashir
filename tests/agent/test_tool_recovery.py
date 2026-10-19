@@ -2,20 +2,17 @@ import json
 from pathlib import Path
 
 import httpx2
-import pytest
 from openai import OpenAI
 
 from aashir.agent import (
-    AgentEvent,
     AgentRequest,
-    ProviderError,
     ToolCallReceived,
     ToolResult,
     TurnCompleted,
     run_agent,
 )
 from aashir.tools import AGENT_TOOLS
-from tests.helpers import make_openai_client, sse_chunk
+from tests.helpers import sse_chunk
 
 
 def test_run_agent_continues_after_an_incomplete_tool_call(
@@ -138,42 +135,111 @@ def test_run_agent_continues_after_an_incomplete_tool_call(
     ]
 
 
-def test_run_agent_rejects_length_truncated_tool_calls_before_execution(
+def test_run_agent_handles_call_errors_and_continues_the_batch(
     tmp_path: Path,
 ) -> None:
-    # Given: a complete write call followed by a length-truncated finish reason.
-    output_path = tmp_path / "must-not-be-written.txt"
-    arguments = json.dumps({"file_path": str(output_path), "content": "no"})
-    body = sse_chunk(
+    # Given: valid writes around unknown, invalid, and duplicate-ID calls.
+    written_path = tmp_path / "written.txt"
+    invalid_path = tmp_path / "invalid.txt"
+    duplicate_path = tmp_path / "duplicate.txt"
+    recovered_path = tmp_path / "recovered.txt"
+    calls = [
         {
-            "tool_calls": [
-                {
-                    "index": 0,
-                    "id": "call_write",
-                    "type": "function",
-                    "function": {"name": "write_file", "arguments": arguments},
-                }
-            ]
-        }
-    )
-    body += sse_chunk({}, finish_reason="length")
-    body += b"data: [DONE]\n\n"
-    request = AgentRequest(
-        model="test-model",
-        messages=[{"role": "user", "content": "do not write"}],
-        tools=AGENT_TOOLS,
-    )
-    events: list[AgentEvent] = []
+            "index": 0,
+            "id": "call_write",
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "arguments": json.dumps(
+                    {"file_path": str(written_path), "content": "saved"}
+                ),
+            },
+        },
+        {
+            "index": 1,
+            "id": "call_unknown",
+            "type": "function",
+            "function": {
+                "name": "unknown_tool",
+                "arguments": json.dumps({"unused": "value"}),
+            },
+        },
+        {
+            "index": 2,
+            "id": "call_invalid",
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "arguments": json.dumps({"file_path": str(invalid_path)}),
+            },
+        },
+        {
+            "index": 3,
+            "id": "call_write",
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "arguments": json.dumps(
+                    {"file_path": str(duplicate_path), "content": "ignored"}
+                ),
+            },
+        },
+        {
+            "index": 4,
+            "id": "call_after_errors",
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "arguments": json.dumps(
+                    {"file_path": str(recovered_path), "content": "done"}
+                ),
+            },
+        },
+    ]
+    requests: list[httpx2.Request] = []
 
-    # When: the agent consumes the truncated completion.
-    client = make_openai_client(httpx2.ByteStream(body))
-    with client, pytest.raises(ProviderError) as error:
-        events.extend(run_agent(client, request))
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            body = sse_chunk({"tool_calls": calls}, finish_reason="tool_calls")
+        else:
+            body = sse_chunk({"content": "Done"}, finish_reason="stop")
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body + b"data: [DONE]\n\n",
+        )
 
-    # Then: truncation is reported before the tool is announced or executed.
-    assert error.value.category == "context_length"
-    assert not output_path.exists()
-    assert not any(
-        isinstance(event, (ToolCallReceived, ToolResult, TurnCompleted))
-        for event in events
-    )
+    with OpenAI(
+        api_key="test-key",
+        base_url="https://example.invalid/v1",
+        max_retries=0,
+        http_client=httpx2.Client(transport=httpx2.MockTransport(respond)),
+    ) as client:
+        # When: the agent processes the provider's tool-call batch.
+        events = list(
+            run_agent(
+                client,
+                AgentRequest(
+                    model="test-model",
+                    messages=[{"role": "user", "content": "use tools"}],
+                    tools=AGENT_TOOLS,
+                ),
+            )
+        )
+
+    # Then: every call has one result, and the final valid call executes.
+    assert written_path.read_text(encoding="utf-8") == "saved"
+    assert not invalid_path.exists()
+    assert not duplicate_path.exists()
+    assert recovered_path.read_text(encoding="utf-8") == "done"
+    results = [event for event in events if isinstance(event, ToolResult)]
+    assert [(event.call_id, event.output) for event in results] == [
+        ("call_write", f"success: written 5 characters in {written_path}"),
+        ("call_unknown", "error: unknown tool called"),
+        ("call_invalid", "error: content must be a string"),
+        ("call_write", "error: duplicate tool call id in response"),
+        ("call_after_errors", f"success: written 4 characters in {recovered_path}"),
+    ]
+    assert isinstance(events[-1], TurnCompleted)
+    assert len(requests) == 2
