@@ -1,14 +1,23 @@
 """Tool dispatch and local file operations for the agent."""
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
+from openai.types.chat.chat_completion_tool_union_param import (
+    ChatCompletionToolUnionParam,
+)
 from pydantic import ValidationError
 
 from aashir.tools.schemas import (
     EditFileArguments,
     ReadFileArguments,
+    ToolArguments,
     WriteFileArguments,
 )
+
+tool_argument_byte_cap: Final = 1_048_576
 
 
 def _validation_error_message(error: ValidationError) -> str:
@@ -33,35 +42,38 @@ def _validation_error_message(error: ValidationError) -> str:
     return f"error: {message}"
 
 
-def execute_tool_call(tool_name: str, raw_arguments: str) -> str:
-    """Validate JSON arguments and dispatch supported calls to file handlers.
+@dataclass(frozen=True, slots=True)
+class ToolDefinition[ArgumentsT: ToolArguments]:
+    """Describe one model-visible tool and its validated executor."""
 
-    Args:
-        tool_name: Name of the requested tool.
-        raw_arguments: JSON-encoded tool arguments from the model.
+    name: str
+    description: str
+    arguments_model: type[ArgumentsT]
+    execute: Callable[[ArgumentsT], str]
 
-    Returns:
-        Tool output or error text suitable for the model.
-    """
-    # TODO: Decide whether file tools need a workspace boundary; paths are currently
-    # used directly, including absolute paths and paths that resolve through symlinks.
-    try:
-        match tool_name:
-            case "read_file":
-                arguments = ReadFileArguments.model_validate_json(raw_arguments)
-                return execute_read(arguments)
-            case "write_file":
-                arguments = WriteFileArguments.model_validate_json(raw_arguments)
-                return execute_write(arguments)
-            case "edit_file":
-                arguments = EditFileArguments.model_validate_json(raw_arguments)
-                return execute_edit(arguments)
-            case "Bash":
-                return "error: not implemented yet"
-            case _:
-                return "error: unknown tool called"
-    except ValidationError as error:
-        return _validation_error_message(error)
+    def provider_tool(self) -> ChatCompletionToolUnionParam:
+        """Build the provider schema from this definition's argument model."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.arguments_model.model_json_schema(),
+            },
+        }
+
+    def execute_json(self, raw_arguments: str) -> str:
+        """Validate raw arguments, then execute and normalize tool failures."""
+        try:
+            arguments = self.arguments_model.model_validate_json(raw_arguments)
+        except ValidationError as error:
+            return _validation_error_message(error)
+
+        try:
+            return self.execute(arguments)
+        except Exception:
+            # Keep unexpected internal exception details out of model-visible output.
+            return "error: tool execution failed"
 
 
 def execute_read(arguments: ReadFileArguments) -> str:
@@ -153,3 +165,62 @@ def execute_edit(arguments: EditFileArguments) -> str:
         return f"success: edited {len(arguments.edits)} text blocks in {arguments.file_path}"
     except (UnicodeError, OSError) as error:
         return f"error: {error}"
+
+
+TOOL_DEFINITIONS: Final = (
+    ToolDefinition(
+        name="read_file",
+        description="Read and return the contents of a file",
+        arguments_model=ReadFileArguments,
+        execute=execute_read,
+    ),
+    ToolDefinition(
+        name="write_file",
+        description=(
+            "Write content to a file. Creates the file if it doesn't exist, "
+            "overwrites if it does. Automatically creates parent directories."
+        ),
+        arguments_model=WriteFileArguments,
+        execute=execute_write,
+    ),
+    ToolDefinition(
+        name="edit_file",
+        description=(
+            "Edit a single file using exact text replacement. Every "
+            "edits[].old_text must match a unique, non-overlapping region of the "
+            "original file. If two changes affect the same block or nearby lines, "
+            "merge them into one edit instead of emitting overlapping edits. Do "
+            "not include large unchanged regions just to connect distant changes."
+        ),
+        arguments_model=EditFileArguments,
+        execute=execute_edit,
+    ),
+)
+
+AGENT_TOOLS: Final[list[ChatCompletionToolUnionParam]] = [
+    definition.provider_tool() for definition in TOOL_DEFINITIONS
+]
+_TOOL_DEFINITIONS_BY_NAME: Final = {
+    definition.name: definition for definition in TOOL_DEFINITIONS
+}
+
+
+def execute_tool_call(tool_name: str, raw_arguments: str) -> str:
+    """Resolve, bound, validate, and execute one built-in tool call.
+
+    Args:
+        tool_name: Name of the requested tool.
+        raw_arguments: JSON-encoded tool arguments from the model.
+
+    Returns:
+        Tool output or error text suitable for the model.
+    """
+    definition = _TOOL_DEFINITIONS_BY_NAME.get(tool_name)
+    if definition is None:
+        return "error: unknown tool called"
+
+    argument_byte_count = len(raw_arguments.encode("utf-8", errors="surrogatepass"))
+    if argument_byte_count > tool_argument_byte_cap:
+        return f"error: tool arguments exceed the {tool_argument_byte_cap}-byte limit"
+
+    return definition.execute_json(raw_arguments)

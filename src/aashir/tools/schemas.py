@@ -1,8 +1,5 @@
-"""Validated argument schemas and provider definitions for agent tools."""
+"""Validated argument schemas for agent tools."""
 
-from openai.types.chat.chat_completion_tool_union_param import (
-    ChatCompletionToolUnionParam,
-)
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -60,38 +57,3 @@ class EditFileArguments(ToolArguments):
             "merge them into one edit instead."
         ),
     )
-
-
-def _function_tool(
-    name: str,
-    description: str,
-    arguments_model: type[ToolArguments],
-) -> ChatCompletionToolUnionParam:
-    """Build a function tool using its argument model's JSON Schema."""
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": description,
-            "parameters": arguments_model.model_json_schema(),
-        },
-    }
-
-
-AGENT_TOOLS: list[ChatCompletionToolUnionParam] = [
-    _function_tool(
-        "read_file",
-        "Read and return the contents of a file",
-        ReadFileArguments,
-    ),
-    _function_tool(
-        "write_file",
-        "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
-        WriteFileArguments,
-    ),
-    _function_tool(
-        "edit_file",
-        "Edit a single file using exact text replacement. Every edits[].old_text must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
-        EditFileArguments,
-    ),
-]
