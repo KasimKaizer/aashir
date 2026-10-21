@@ -334,9 +334,8 @@ def test_write_file_rejects_unrecognized_arguments_before_creating_file(
     # When: the tool parses the request.
     result = execute_tool_call("write_file", arguments)
 
-    # Then: the extra field is rejected without echoing its value or creating the file.
-    assert result.startswith("error:")
-    assert "value" not in result
+    # Then: the error rejects the extra field without echoing its key or value.
+    assert result == "error: invalid arguments: Extra inputs are not permitted"
     assert not path.exists()
 
 
@@ -357,6 +356,6 @@ def test_edit_file_rejects_unrecognized_edit_fields_without_writing(
     # When: the tool parses the request.
     result = execute_tool_call("edit_file", arguments)
 
-    # Then: the extra field is rejected before the file is changed.
-    assert result.startswith("error:")
+    # Then: the error rejects the extra field without echoing its key or value.
+    assert result == "error: invalid arguments: Extra inputs are not permitted"
     assert path.read_text(encoding="utf-8") == original

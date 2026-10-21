@@ -20,26 +20,37 @@ from aashir.tools.schemas import (
 tool_argument_byte_cap: Final = 1_048_576
 
 
-def _validation_error_message(error: ValidationError) -> str:
+def _generic_validation_error_message(error: ValidationError) -> str:
     """Format validation errors without echoing the invalid input."""
+    issue = error.errors(include_input=False)[0]
+    if issue["type"] == "extra_forbidden":
+        # Pydantic includes the unrecognized input key in the error location.
+        return f"error: invalid arguments: {issue['msg']}"
+
+    location_text = ".".join(str(part) for part in issue["loc"]) or "arguments"
+    return f"error: invalid arguments at {location_text}: {issue['msg']}"
+
+
+def _file_validation_error_message(error: ValidationError) -> str:
+    """Preserve concise validation messages for the built-in file tools."""
     issue = error.errors(include_input=False)[0]
     match issue["loc"]:
         case ("file_path",):
-            message = "file_path must be a non-empty string"
+            return "error: file_path must be a non-empty string"
         case ("content",):
-            message = "content must be a string"
+            return "error: content must be a string"
         case ("edits",):
-            message = "edits must be a non-empty list"
+            return "error: edits must be a non-empty list"
         case ("edits", index):
-            message = f"edit at index {index} must be a dict"
+            return f"error: edit at index {index} must be a dict"
         case ("edits", index, "old_text"):
-            message = f"edit at index {index} - 'old_text' must be a non-empty string"
+            return (
+                f"error: edit at index {index} - 'old_text' must be a non-empty string"
+            )
         case ("edits", index, "new_text"):
-            message = f"edit at index {index} - 'new_text' must be a string"
-        case location:
-            location_text = ".".join(str(part) for part in location) or "arguments"
-            message = f"invalid arguments at {location_text}: {issue['msg']}"
-    return f"error: {message}"
+            return f"error: edit at index {index} - 'new_text' must be a string"
+        case _:
+            return _generic_validation_error_message(error)
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +61,9 @@ class ToolDefinition[ArgumentsT: ToolArguments]:
     description: str
     arguments_model: type[ArgumentsT]
     execute: Callable[[ArgumentsT], str]
+    validation_error_formatter: Callable[[ValidationError], str] = (
+        _generic_validation_error_message
+    )
 
     def provider_tool(self) -> ChatCompletionToolUnionParam:
         """Build the provider schema from this definition's argument model."""
@@ -67,7 +81,7 @@ class ToolDefinition[ArgumentsT: ToolArguments]:
         try:
             arguments = self.arguments_model.model_validate_json(raw_arguments)
         except ValidationError as error:
-            return _validation_error_message(error)
+            return self.validation_error_formatter(error)
 
         try:
             return self.execute(arguments)
@@ -173,6 +187,7 @@ TOOL_DEFINITIONS: Final = (
         description="Read and return the contents of a file",
         arguments_model=ReadFileArguments,
         execute=execute_read,
+        validation_error_formatter=_file_validation_error_message,
     ),
     ToolDefinition(
         name="write_file",
@@ -182,6 +197,7 @@ TOOL_DEFINITIONS: Final = (
         ),
         arguments_model=WriteFileArguments,
         execute=execute_write,
+        validation_error_formatter=_file_validation_error_message,
     ),
     ToolDefinition(
         name="edit_file",
@@ -194,6 +210,7 @@ TOOL_DEFINITIONS: Final = (
         ),
         arguments_model=EditFileArguments,
         execute=execute_edit,
+        validation_error_formatter=_file_validation_error_message,
     ),
 )
 

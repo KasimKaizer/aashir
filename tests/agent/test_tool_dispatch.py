@@ -7,7 +7,14 @@ from openai.types.chat import ChatCompletionMessageParam
 from aashir.agent.contracts import ToolResult
 from aashir.agent.tool_calls import _execute_tool_calls, _ToolCallAccumulator
 from aashir.tools import AGENT_TOOLS, execute_tool_call
-from aashir.tools.execution import TOOL_DEFINITIONS
+from aashir.tools.execution import TOOL_DEFINITIONS, ToolDefinition
+from aashir.tools.schemas import ToolArguments
+
+
+class SearchArguments(ToolArguments):
+    """Arguments for the generic formatter test."""
+
+    content: str
 
 
 @pytest.mark.parametrize(
@@ -35,6 +42,38 @@ def test_execute_tool_calls_rejects_unknown_tools(tool_name: str) -> None:
             output="error: unknown tool called",
         )
     ]
+
+
+@pytest.mark.parametrize(
+    ("raw_arguments", "expected_output"),
+    [
+        (
+            '{"content": 42}',
+            "error: invalid arguments at content: Input should be a valid string",
+        ),
+        (
+            '{"content": "query", "unexpected": "value"}',
+            "error: invalid arguments: Extra inputs are not permitted",
+        ),
+    ],
+    ids=("invalid-field-value", "unrecognized-field"),
+)
+def test_tool_definition_uses_generic_validation_error_formatter_by_default(
+    raw_arguments: str, expected_output: str
+) -> None:
+    # Given: a generic tool definition with no custom formatter.
+    definition = ToolDefinition(
+        name="search",
+        description="Search for information",
+        arguments_model=SearchArguments,
+        execute=lambda arguments: arguments.content,
+    )
+
+    # When: the dispatcher validates invalid arguments.
+    result = definition.execute_json(raw_arguments)
+
+    # Then: it returns the generic error for that validation issue.
+    assert result == expected_output
 
 
 def test_execute_tool_calls_rejects_invalid_arguments_before_writing(
