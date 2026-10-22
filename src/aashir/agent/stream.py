@@ -127,13 +127,11 @@ def _stream_completion(
                 accumulator = tool_calls.setdefault(
                     tool_call_delta.index, _ToolCallAccumulator()
                 )
-                # TODO: Verify whether provider ID/name fields are fragments or full
-                # values; handle each format according to the provider's contract.
-                if tool_call_delta.id:
-                    accumulator.call_id += tool_call_delta.id
+                if tool_call_delta.id and not accumulator.call_id:
+                    accumulator.call_id = tool_call_delta.id
                 if tool_call_delta.function:
-                    if tool_call_delta.function.name:
-                        accumulator.name += tool_call_delta.function.name
+                    if tool_call_delta.function.name and not accumulator.name:
+                        accumulator.name = tool_call_delta.function.name
                     if tool_call_delta.function.arguments:
                         accumulator.arguments += tool_call_delta.function.arguments
 
