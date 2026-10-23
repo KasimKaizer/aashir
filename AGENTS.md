@@ -73,6 +73,14 @@ Aashir is an AI agent for software-engineering tasks. The idea of this project i
 - If a feature introduces generated Python code, change its generator/source and regenerate; do not edit generated files directly.
 - If a terminal UI (TUI) introduces keybindings, never hardcode key checks. Keep all keybindings configurable and add defaults to the applicable keybinding configuration.
 
+### Python Package API
+
+- Treat `aashir.agent` and `aashir.tools` as the supported package import surfaces. Re-export supported names in each package's `__init__.py` and list them explicitly in `__all__`.
+- Examples and tests that exercise supported public behavior should import from these package facades, not implementation modules. A direct import from an implementation module is not a supported public API.
+- Prefix module-level implementation-only helpers, classes, and constants with `_`. Internal modules and focused unit tests may still import these names directly; that does not make them public.
+- Keep CLI entry points and framework hooks under the names required by their callers; they are entry points, not general package API.
+- For Pydantic models used in provider-visible JSON Schema, keep schema titles descriptive even when Python class names are private. Test generated schemas when renaming these classes because class names can affect titles and `$ref` keys.
+
 ## Tool, Protocol, and Safety Rules
 
 The following rules state stable safety requirements for Aashir; platform-specific threat assumptions and acceptance checks belong in the relevant roadmap checkpoint. Agents changing related behavior must preserve and test these requirements. The Agent Conduct subsection applies to coding agents working in this repository.
