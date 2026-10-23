@@ -13,7 +13,6 @@ from openai import OpenAI
 from aashir import cli
 from aashir.agent import (
     AnswerDelta,
-    ProviderError,
     ReasoningDelta,
     ReasoningSummary,
     ToolCallReceived,
@@ -82,7 +81,10 @@ def test_main_reports_unsupported_reasoning_effort_cleanly(
 
     # Then: it reports the invalid setting without a traceback.
     assert error.value.code == 2
-    assert capsys.readouterr().err.startswith("error: Invalid REASONING_EFFORT")
+    assert capsys.readouterr().err == (
+        "error: Invalid REASONING_EFFORT 'unsupported'; expected one of: "
+        "none, minimal, low, medium, high, xhigh, or max.\n"
+    )
 
 
 @pytest.mark.parametrize(
@@ -123,7 +125,13 @@ def test_configure_request_uses_default_prompt_without_nonempty_custom_file(
     }
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err.startswith("warn:") is warning_expected
+    if warning_expected:
+        assert captured.err.startswith(
+            "warn: custom system prompt could not be loaded because of the following: "
+        )
+        assert captured.err.endswith(", using default prompt\n")
+    else:
+        assert captured.err == ""
 
 
 def test_main_requires_prompt_argument_when_option_is_omitted(
@@ -139,7 +147,7 @@ def test_main_requires_prompt_argument_when_option_is_omitted(
 
     # Then: argparse reports the missing option.
     assert error.value.code == 2
-    assert "-p" in capsys.readouterr().err
+    assert "arguments are required: -p" in capsys.readouterr().err
 
 
 def _chunk(
@@ -249,11 +257,12 @@ def test_main_prints_answer_before_stream_finishes_when_provider_sends_chunks(
 
     # Then: the first fragment was already visible and all answer text was printed.
     output = "".join(observed_before_finish) + capsys.readouterr().out
-    assert output in {"Hello", "Hello\n"}
+    assert output == "Hello"
 
 
-def test_main_rejects_provider_stream_without_choices_when_chunk_is_empty(
+def test_main_reports_provider_stream_without_choices_cleanly(
     mock_streaming_api: Callable[[httpx2.SyncByteStream], None],
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     # Given: a provider stream with no completion choices.
     mock_streaming_api(
@@ -261,11 +270,16 @@ def test_main_rejects_provider_stream_without_choices_when_chunk_is_empty(
     )
 
     # When: the CLI consumes the invalid stream.
-    with pytest.raises(ProviderError) as error:
+    with pytest.raises(SystemExit) as error:
         cli.main()
+    captured = capsys.readouterr()
 
-    # Then: the invalid provider response is reported as a protocol error.
-    assert error.value.category == "protocol"
+    # Then: it exits unsuccessfully and reports a concise protocol error.
+    assert error.value.code == 1
+    assert (
+        captured.err
+        == "error: protocol: provider stream contained no completion choices\n"
+    )
 
 
 def test_main_preserves_partial_answer_when_provider_returns_error(
@@ -279,12 +293,14 @@ def test_main_preserves_partial_answer_when_provider_returns_error(
     mock_streaming_api(httpx2.ByteStream(body))
 
     # When: the CLI consumes the failed stream.
-    with pytest.raises(ProviderError, match="stream failed") as error:
+    with pytest.raises(SystemExit) as error:
         cli.main()
+    captured = capsys.readouterr()
 
-    # Then: the error is normalized and already streamed answer text remains visible.
-    assert error.value.category == "provider_unavailable"
-    assert capsys.readouterr().out == "Partial"
+    # Then: the CLI reports the provider error and preserves already-streamed text.
+    assert error.value.code == 1
+    assert captured.err == "error: provider_unavailable: stream failed\n"
+    assert captured.out == "Partial"
 
 
 def test_render_events_prints_only_answer_text(

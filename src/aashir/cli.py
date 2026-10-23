@@ -17,6 +17,7 @@ from aashir.agent import (
     AgentEvent,
     AgentRequest,
     AnswerDelta,
+    ProviderError,
     ReasoningDelta,
     ReasoningSummary,
     ToolCallReceived,
@@ -152,7 +153,11 @@ def main() -> None:
         raise SystemExit(2) from None
 
     with OpenAI(api_key=settings.api_key, base_url=settings.base_url) as client:
-        _render_events(run_agent(client, request))
+        try:
+            _render_events(run_agent(client, request))
+        except ProviderError as error:
+            print(f"error: {error.category}: {error}", file=sys.stderr)
+            raise SystemExit(1) from None
 
 
 if __name__ == "__main__":
