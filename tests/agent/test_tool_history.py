@@ -61,27 +61,26 @@ def test_run_agent_preserves_tool_history_and_emits_lifecycle_events_in_order(
             content=body + b"data: [DONE]\n\n",
         )
 
-    client = OpenAI(
-        api_key="test-key",
-        base_url="https://example.invalid/v1",
-        max_retries=0,
-        http_client=httpx2.Client(transport=httpx2.MockTransport(respond)),
-    )
-
     # When: the agent completes a tool round trip.
     initial_messages: list[ChatCompletionMessageParam] = [
         {"role": "user", "content": "use a tool"}
     ]
-    events = list(
-        run_agent(
-            client,
-            AgentRequest(
-                model="test-model",
-                messages=initial_messages,
-                tools=AGENT_TOOLS,
-            ),
+    with OpenAI(
+        api_key="test-key",
+        base_url="https://example.invalid/v1",
+        max_retries=0,
+        http_client=httpx2.Client(transport=httpx2.MockTransport(respond)),
+    ) as client:
+        events = list(
+            run_agent(
+                client,
+                AgentRequest(
+                    model="test-model",
+                    messages=initial_messages,
+                    tools=AGENT_TOOLS,
+                ),
+            )
         )
-    )
 
     # Then: each call has a matching result before the turn completes.
     tool_events = [

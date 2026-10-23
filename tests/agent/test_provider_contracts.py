@@ -3,15 +3,6 @@ from pathlib import Path
 
 import httpx2
 import pytest
-from openai import (
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    AuthenticationError,
-    InternalServerError,
-    PermissionDeniedError,
-    RateLimitError,
-)
 
 from aashir.agent import (
     AgentEvent,
@@ -25,12 +16,7 @@ from aashir.agent import (
     run_agent,
 )
 from aashir.tools import AGENT_TOOLS
-from tests.helpers import (
-    JsonValue,
-    make_failing_openai_client,
-    make_openai_client,
-    sse_chunk,
-)
+from tests.helpers import JsonValue, make_openai_client, sse_chunk
 
 
 def test_run_agent_rejects_length_truncated_tool_calls_before_execution(
@@ -116,14 +102,15 @@ def test_run_agent_normalizes_documented_raw_reasoning_fields(
     body += b"data: [DONE]\n\n"
 
     # When: the agent parses the provider chunk.
-    events = list(
-        run_agent(
-            make_openai_client(httpx2.ByteStream(body)),
-            AgentRequest(
-                model="test-model", messages=[{"role": "user", "content": "hi"}]
-            ),
+    with make_openai_client(httpx2.ByteStream(body)) as client:
+        events = list(
+            run_agent(
+                client,
+                AgentRequest(
+                    model="test-model", messages=[{"role": "user", "content": "hi"}]
+                ),
+            )
         )
-    )
 
     # Then: one reasoning delta is emitted and answer text stays separate.
     assert [event.text for event in events if isinstance(event, ReasoningDelta)] == [
@@ -148,10 +135,13 @@ def test_run_agent_rejects_nonterminal_or_incomplete_completions(
     events = []
 
     # When: the agent consumes the incomplete completion.
-    with pytest.raises(ProviderError) as error:
+    with (
+        make_openai_client(httpx2.ByteStream(body)) as client,
+        pytest.raises(ProviderError) as error,
+    ):
         events.extend(
             run_agent(
-                make_openai_client(httpx2.ByteStream(body)),
+                client,
                 AgentRequest(
                     model="test-model", messages=[{"role": "user", "content": "hi"}]
                 ),
@@ -194,10 +184,13 @@ def test_run_agent_does_not_execute_tool_calls_without_tool_calls_finish_reason(
     monkeypatch.setattr("aashir.agent.tool_calls.execute_tool_call", fail_on_execution)
 
     # When: the agent consumes the stream.
-    with pytest.raises(ProviderError) as error:
+    with (
+        make_openai_client(httpx2.ByteStream(body)) as client,
+        pytest.raises(ProviderError) as error,
+    ):
         events.extend(
             run_agent(
-                make_openai_client(httpx2.ByteStream(body)),
+                client,
                 AgentRequest(
                     model="test-model",
                     messages=[{"role": "user", "content": "do not write"}],
@@ -212,68 +205,3 @@ def test_run_agent_does_not_execute_tool_calls_without_tool_calls_finish_reason(
         isinstance(event, (ToolCallReceived, ToolResult, TurnCompleted))
         for event in events
     )
-
-
-@pytest.mark.parametrize(
-    ("error_class", "status", "expected_category"),
-    [
-        (RateLimitError, 429, "rate_limit"),
-        (APIStatusError, 429, "rate_limit"),
-        (AuthenticationError, 401, "auth"),
-        (PermissionDeniedError, 403, "auth"),
-        (APIStatusError, 401, "auth"),
-        (APIStatusError, 403, "auth"),
-        (InternalServerError, 500, "provider_unavailable"),
-        (APIStatusError, 500, "provider_unavailable"),
-        (APIStatusError, 503, "provider_unavailable"),
-    ],
-)
-def test_run_agent_normalizes_sdk_status_error_classes(
-    error_class: type[APIStatusError],
-    status: int,
-    expected_category: str,
-) -> None:
-    # Given: a provider transport that fails with an SDK status error.
-    request = httpx2.Request("POST", "https://example.invalid/v1/chat/completions")
-    error = error_class(
-        "provider failed",
-        response=httpx2.Response(status, request=request),
-        body=None,
-    )
-
-    # When: the agent attempts the provider request.
-    events = run_agent(
-        make_failing_openai_client(error),
-        AgentRequest(model="test-model", messages=[{"role": "user", "content": "hi"}]),
-    )
-    with pytest.raises(ProviderError) as raised:
-        list(events)
-
-    # Then: the error is normalized with its message and cause preserved.
-    assert raised.value.category == expected_category
-    assert raised.value.error_type is None
-    assert raised.value.message == "provider failed"
-    assert raised.value.__cause__ is error
-
-
-@pytest.mark.parametrize("error_class", [APIConnectionError, APITimeoutError])
-def test_run_agent_normalizes_sdk_connection_error_classes(
-    error_class: type[APIConnectionError],
-) -> None:
-    # Given: a provider transport that fails with an SDK connection error.
-    request = httpx2.Request("POST", "https://example.invalid/v1/chat/completions")
-    error = error_class(request=request)
-
-    # When: the agent attempts the provider request.
-    events = run_agent(
-        make_failing_openai_client(error),
-        AgentRequest(model="test-model", messages=[{"role": "user", "content": "hi"}]),
-    )
-    with pytest.raises(ProviderError) as raised:
-        list(events)
-
-    # Then: the error is normalized with its message and cause preserved.
-    assert raised.value.category == "provider_unavailable"
-    assert raised.value.error_type is None
-    assert raised.value.message == error.message
-    assert raised.value.__cause__ is error

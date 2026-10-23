@@ -92,24 +92,23 @@ def test_run_agent_assembles_fragmented_interleaved_tool_calls_in_completion_ord
             content=body + b"data: [DONE]\n\n",
         )
 
-    client = OpenAI(
+    # When: the agent assembles and runs the completed calls.
+    with OpenAI(
         api_key="test-key",
         base_url="https://example.invalid/v1",
         max_retries=0,
         http_client=httpx2.Client(transport=httpx2.MockTransport(respond)),
-    )
-
-    # When: the agent assembles and runs the completed calls.
-    events = list(
-        run_agent(
-            client,
-            AgentRequest(
-                model="test-model",
-                messages=[{"role": "user", "content": "use tools"}],
-                tools=AGENT_TOOLS,
-            ),
+    ) as client:
+        events = list(
+            run_agent(
+                client,
+                AgentRequest(
+                    model="test-model",
+                    messages=[{"role": "user", "content": "use tools"}],
+                    tools=AGENT_TOOLS,
+                ),
+            )
         )
-    )
 
     # Then: calls execute in index order, with each start before its result.
     tool_events = [

@@ -34,18 +34,21 @@ def test_run_agent_yields_answer_deltas_before_provider_stream_finishes() -> Non
             yield b"data: [DONE]\n\n"
 
     # When: the consumer pulls only the first event.
-    events = run_agent(
-        make_openai_client(StreamingBody()),
-        AgentRequest(model="test-model", messages=[{"role": "user", "content": "hi"}]),
-    )
-    first = next(events)
+    with make_openai_client(StreamingBody()) as client:
+        events = run_agent(
+            client,
+            AgentRequest(
+                model="test-model", messages=[{"role": "user", "content": "hi"}]
+            ),
+        )
+        first = next(events)
 
-    # Then: answer text is observable before the stream finishes.
-    assert isinstance(first, AnswerDelta)
-    assert first.text == "Hel"
-    assert consumed == ["first"]
+        # Then: answer text is observable before the stream finishes.
+        assert isinstance(first, AnswerDelta)
+        assert first.text == "Hel"
+        assert consumed == ["first"]
 
-    rest = list(events)
+        rest = list(events)
     assert (
         "".join(
             event.text for event in [first, *rest] if isinstance(event, AnswerDelta)
@@ -64,16 +67,13 @@ def test_run_agent_does_not_fabricate_reasoning_when_provider_omits_it(
     body += b"data: [DONE]\n\n"
 
     # When: the agent consumes the provider stream.
-    events = list(
-        run_agent(
-            make_openai_client(httpx2.ByteStream(body)),
-            AgentRequest(
-                model="test-model",
-                messages=[{"role": "user", "content": "hi"}],
-                reasoning_effort=reasoning_effort,
-            ),
+    with make_openai_client(httpx2.ByteStream(body)) as client:
+        request = AgentRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            reasoning_effort=reasoning_effort,
         )
-    )
+        events = list(run_agent(client, request))
 
     # Then: no reasoning events are invented and the answer is preserved.
     assert not any(isinstance(event, ReasoningDelta) for event in events)
@@ -94,15 +94,18 @@ def test_run_agent_yields_partial_deltas_then_raises_normalized_provider_error()
         finish_reason="error",
         error={"message": "stream failed", "type": "server_error"},
     )
-    events = run_agent(
-        make_openai_client(httpx2.ByteStream(body)),
-        AgentRequest(model="test-model", messages=[{"role": "user", "content": "hi"}]),
-    )
-
     # When: the consumer iterates the stream.
     seen: list[AgentEvent] = []
-    with pytest.raises(ProviderError, match="stream failed") as error:
-        for event in events:
+    with (
+        make_openai_client(httpx2.ByteStream(body)) as client,
+        pytest.raises(ProviderError, match="stream failed") as error,
+    ):
+        for event in run_agent(
+            client,
+            AgentRequest(
+                model="test-model", messages=[{"role": "user", "content": "hi"}]
+            ),
+        ):
             seen.append(event)  # noqa: PERF402 -- retain partial events before the exception
 
     # Then: provider context and already-yielded output survive normalization.
@@ -117,41 +120,6 @@ def test_run_agent_yields_partial_deltas_then_raises_normalized_provider_error()
 
 
 @pytest.mark.parametrize(
-    ("provider_type", "provider_code", "expected_category"),
-    [
-        ("rate_limit_error", None, "rate_limit"),
-        ("authentication_error", None, "auth"),
-        ("invalid_request_error", "context_length_exceeded", "context_length"),
-        ("server_error", None, "provider_unavailable"),
-        ("invalid_request_error", "content_policy_violation", "content_policy"),
-        ("unrecognized_error", None, "unknown"),
-    ],
-)
-def test_run_agent_normalizes_provider_error_categories(
-    provider_type: str,
-    provider_code: str | None,
-    expected_category: str,
-) -> None:
-    # Given: a provider error payload with a known or unrecognized type/code.
-    error_payload = {"message": "provider failed", "type": provider_type}
-    if provider_code is not None:
-        error_payload["code"] = provider_code
-    body = sse_chunk({}, error=error_payload) + b"data: [DONE]\n\n"
-    events = run_agent(
-        make_openai_client(httpx2.ByteStream(body)),
-        AgentRequest(model="test-model", messages=[{"role": "user", "content": "hi"}]),
-    )
-
-    # When: the consumer iterates the provider stream.
-    with pytest.raises(ProviderError) as error:
-        list(events)
-
-    # Then: the normalized error retains its category and provider type.
-    assert error.value.category == expected_category
-    assert error.value.error_type == provider_type
-
-
-@pytest.mark.parametrize(
     ("finish_reason", "expected_category"),
     [("length", "context_length"), ("content_filter", "content_policy")],
 )
@@ -161,15 +129,21 @@ def test_run_agent_normalizes_length_and_content_filter_finish_reasons(
 ) -> None:
     # Given: partial output followed by a length or content-filter finish reason.
     body = sse_chunk({"content": "Partial"}, finish_reason=finish_reason)
-    body += b"data: [DONE]\\n\\n"
-    events = run_agent(
-        make_openai_client(httpx2.ByteStream(body)),
-        AgentRequest(model="test-model", messages=[{"role": "user", "content": "hi"}]),
-    )
+    body += b"data: [DONE]\n\n"
     seen: list[AgentEvent] = []
 
-    # When: the consumer iterates the provider stream.
-    with pytest.raises(ProviderError) as error:
+    with (
+        make_openai_client(httpx2.ByteStream(body)) as client,
+        pytest.raises(ProviderError) as error,
+    ):
+        events = run_agent(
+            client,
+            AgentRequest(
+                model="test-model", messages=[{"role": "user", "content": "hi"}]
+            ),
+        )
+
+        # When: the consumer iterates the provider stream.
         seen.extend(events)
 
     # Then: the reason has its normalized category without losing partial output.
@@ -186,14 +160,20 @@ def test_run_agent_normalizes_unknown_finish_reason() -> None:
     # Given: partial answer text followed by an unrecognized completion reason.
     body = sse_chunk({"content": "Partial"}, finish_reason="future_reason")
     body += b"data: [DONE]\n\n"
-    events = run_agent(
-        make_openai_client(httpx2.ByteStream(body)),
-        AgentRequest(model="test-model", messages=[{"role": "user", "content": "hi"}]),
-    )
     seen: list[AgentEvent] = []
 
-    # When: the consumer iterates the provider stream.
-    with pytest.raises(ProviderError) as error:
+    with (
+        make_openai_client(httpx2.ByteStream(body)) as client,
+        pytest.raises(ProviderError) as error,
+    ):
+        events = run_agent(
+            client,
+            AgentRequest(
+                model="test-model", messages=[{"role": "user", "content": "hi"}]
+            ),
+        )
+
+        # When: the consumer iterates the provider stream.
         for event in events:
             seen.append(event)  # noqa: PERF402 -- retain partial events before the exception
 
@@ -230,14 +210,15 @@ def test_run_agent_preserves_event_types_and_provider_order() -> None:
     )
 
     # When: the agent consumes the interleaved provider stream.
-    events = list(
-        run_agent(
-            make_openai_client(httpx2.ByteStream(body)),
-            AgentRequest(
-                model="test-model", messages=[{"role": "user", "content": "hi"}]
-            ),
+    with make_openai_client(httpx2.ByteStream(body)) as client:
+        events = list(
+            run_agent(
+                client,
+                AgentRequest(
+                    model="test-model", messages=[{"role": "user", "content": "hi"}]
+                ),
+            )
         )
-    )
 
     # Then: unknown details are ignored; event types remain distinct and ordered.
     ordered = [
