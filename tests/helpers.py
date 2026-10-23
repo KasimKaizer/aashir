@@ -41,6 +41,7 @@ def sse_chunk[DeltaValue, ErrorValue](
 
 def make_openai_client(stream: httpx2.SyncByteStream) -> OpenAI:
     """Build an OpenAI client served by an in-memory SSE stream."""
+
     def respond(_request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(
             200,
@@ -58,6 +59,7 @@ def make_openai_client(stream: httpx2.SyncByteStream) -> OpenAI:
 
 def make_failing_openai_client(error: APIError) -> OpenAI:
     """Build an OpenAI client whose transport raises an SDK error."""
+
     def respond(_request: httpx2.Request) -> httpx2.Response:
         raise error
 

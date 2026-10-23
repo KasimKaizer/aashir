@@ -349,7 +349,9 @@ def test_edit_file_rejects_unrecognized_edit_fields_without_writing(
     arguments = json.dumps(
         {
             "file_path": str(path),
-            "edits": [{"old_text": "before", "new_text": "after", "unexpected": "value"}],
+            "edits": [
+                {"old_text": "before", "new_text": "after", "unexpected": "value"}
+            ],
         }
     )
 
