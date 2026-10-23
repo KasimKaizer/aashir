@@ -11,13 +11,13 @@ from openai.types.chat.chat_completion_tool_union_param import (
 from pydantic import ValidationError
 
 from aashir.tools.schemas import (
-    EditFileArguments,
-    ReadFileArguments,
-    ToolArguments,
-    WriteFileArguments,
+    _EditFileArguments,
+    _ReadFileArguments,
+    _ToolArguments,
+    _WriteFileArguments,
 )
 
-tool_argument_byte_cap: Final = 1_048_576
+_TOOL_ARGUMENT_BYTE_CAP: Final = 1_048_576
 
 
 def _generic_validation_error_message(error: ValidationError) -> str:
@@ -54,7 +54,7 @@ def _file_validation_error_message(error: ValidationError) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class ToolDefinition[ArgumentsT: ToolArguments]:
+class _ToolDefinition[ArgumentsT: _ToolArguments]:
     """Describe one model-visible tool and its validated executor."""
 
     name: str
@@ -83,6 +83,8 @@ class ToolDefinition[ArgumentsT: ToolArguments]:
         except ValidationError as error:
             return self.validation_error_formatter(error)
 
+        # TODO: Add permission hook here; advertised tools are not authorization.
+        # TODO: Enforce workspace containment in the filesystem-tool boundary.
         try:
             return self.execute(arguments)
         except Exception:
@@ -90,7 +92,7 @@ class ToolDefinition[ArgumentsT: ToolArguments]:
             return "error: tool execution failed"
 
 
-def execute_read(arguments: ReadFileArguments) -> str:
+def _execute_read(arguments: _ReadFileArguments) -> str:
     """Read UTF-8 text while preserving the file's newline sequences.
 
     Args:
@@ -105,9 +107,11 @@ def execute_read(arguments: ReadFileArguments) -> str:
         return f"error: {error}"
 
 
-# TODO: Consider same-directory temporary files and atomic replacement for both file
-# writing tools; decide how permissions and symlinks should behave first.
-def execute_write(arguments: WriteFileArguments) -> str:
+# TODO: Revisit atomic replacement for both file-writing tools after deciding how
+# permissions, symlinks, hard links, and inode metadata should behave.
+
+
+def _execute_write(arguments: _WriteFileArguments) -> str:
     """Create parent directories and replace a UTF-8 file's contents.
 
     Empty content is valid, and newline sequences are preserved.
@@ -130,7 +134,7 @@ def execute_write(arguments: WriteFileArguments) -> str:
         return f"error: {error}"
 
 
-def execute_edit(arguments: EditFileArguments) -> str:
+def _execute_edit(arguments: _EditFileArguments) -> str:
     """Apply exact, non-overlapping replacements to one UTF-8 file.
 
     Every ``old_text`` must occur exactly once in the original content. An empty
@@ -181,25 +185,25 @@ def execute_edit(arguments: EditFileArguments) -> str:
         return f"error: {error}"
 
 
-TOOL_DEFINITIONS: Final = (
-    ToolDefinition(
+_TOOL_DEFINITIONS: Final = (
+    _ToolDefinition(
         name="read_file",
         description="Read and return the contents of a file",
-        arguments_model=ReadFileArguments,
-        execute=execute_read,
+        arguments_model=_ReadFileArguments,
+        execute=_execute_read,
         validation_error_formatter=_file_validation_error_message,
     ),
-    ToolDefinition(
+    _ToolDefinition(
         name="write_file",
         description=(
             "Write content to a file. Creates the file if it doesn't exist, "
             "overwrites if it does. Automatically creates parent directories."
         ),
-        arguments_model=WriteFileArguments,
-        execute=execute_write,
+        arguments_model=_WriteFileArguments,
+        execute=_execute_write,
         validation_error_formatter=_file_validation_error_message,
     ),
-    ToolDefinition(
+    _ToolDefinition(
         name="edit_file",
         description=(
             "Edit a single file using exact text replacement. Every "
@@ -208,17 +212,17 @@ TOOL_DEFINITIONS: Final = (
             "merge them into one edit instead of emitting overlapping edits. Do "
             "not include large unchanged regions just to connect distant changes."
         ),
-        arguments_model=EditFileArguments,
-        execute=execute_edit,
+        arguments_model=_EditFileArguments,
+        execute=_execute_edit,
         validation_error_formatter=_file_validation_error_message,
     ),
 )
 
 AGENT_TOOLS: Final[list[ChatCompletionToolUnionParam]] = [
-    definition.provider_tool() for definition in TOOL_DEFINITIONS
+    definition.provider_tool() for definition in _TOOL_DEFINITIONS
 ]
 _TOOL_DEFINITIONS_BY_NAME: Final = {
-    definition.name: definition for definition in TOOL_DEFINITIONS
+    definition.name: definition for definition in _TOOL_DEFINITIONS
 }
 
 
@@ -237,7 +241,7 @@ def execute_tool_call(tool_name: str, raw_arguments: str) -> str:
         return "error: unknown tool called"
 
     argument_byte_count = len(raw_arguments.encode("utf-8", errors="surrogatepass"))
-    if argument_byte_count > tool_argument_byte_cap:
-        return f"error: tool arguments exceed the {tool_argument_byte_cap}-byte limit"
+    if argument_byte_count > _TOOL_ARGUMENT_BYTE_CAP:
+        return f"error: tool arguments exceed the {_TOOL_ARGUMENT_BYTE_CAP}-byte limit"
 
     return definition.execute_json(raw_arguments)

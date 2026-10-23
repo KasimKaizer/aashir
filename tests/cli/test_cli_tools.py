@@ -104,8 +104,10 @@ def test_main_sends_configured_request_and_advertises_tools(
     edits_schema = parameters["properties"]["edits"]
     assert edits_schema["type"] == "array"
     assert edits_schema["minItems"] == 1
-    assert edits_schema["items"]["$ref"] == "#/$defs/TextEdit"
-    edit_schema = parameters["$defs"]["TextEdit"]
+    text_edit_reference = edits_schema["items"]["$ref"]
+    definition_name = text_edit_reference.rsplit("/", maxsplit=1)[-1]
+    edit_schema = parameters["$defs"][definition_name]
+    assert edit_schema["title"] == "TextEdit"
     assert edit_schema["additionalProperties"] is False
     assert {"old_text", "new_text"} <= set(edit_schema["required"])
     assert edit_schema["properties"]["old_text"]["type"] == "string"
@@ -140,4 +142,4 @@ def test_main_returns_tool_result_to_provider_after_round_trip(
     assert tool_result["role"] == "tool"
     assert tool_result["tool_call_id"] == assistant_message["tool_calls"][0]["id"]
     assert tool_result["content"] == "café\n"
-    assert "Done" in capsys.readouterr().out
+    assert capsys.readouterr().out == "Done"

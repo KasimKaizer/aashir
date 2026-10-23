@@ -7,11 +7,11 @@ from openai.types.chat import ChatCompletionMessageParam
 from aashir.agent.contracts import ToolResult
 from aashir.agent.tool_calls import _execute_tool_calls, _ToolCallAccumulator
 from aashir.tools import AGENT_TOOLS, execute_tool_call
-from aashir.tools.execution import TOOL_DEFINITIONS, ToolDefinition
-from aashir.tools.schemas import ToolArguments
+from aashir.tools.execution import _TOOL_DEFINITIONS, _ToolDefinition
+from aashir.tools.schemas import _EditFileArguments, _ToolArguments
 
 
-class SearchArguments(ToolArguments):
+class SearchArguments(_ToolArguments):
     """Arguments for the generic formatter test."""
 
     content: str
@@ -62,7 +62,7 @@ def test_tool_definition_uses_generic_validation_error_formatter_by_default(
     raw_arguments: str, expected_output: str
 ) -> None:
     # Given: a generic tool definition with no custom formatter.
-    definition = ToolDefinition(
+    definition = _ToolDefinition(
         name="search",
         description="Search for information",
         arguments_model=SearchArguments,
@@ -185,7 +185,9 @@ def test_advertised_schema_and_dispatch_use_the_same_tool_definition(
 ) -> None:
     # Given: the write_file definition and its advertised provider schema.
     definition = next(
-        definition for definition in TOOL_DEFINITIONS if definition.name == "write_file"
+        definition
+        for definition in _TOOL_DEFINITIONS
+        if definition.name == "write_file"
     )
     advertised_function = next(
         tool["function"]
@@ -206,3 +208,41 @@ def test_advertised_schema_and_dispatch_use_the_same_tool_definition(
     )
     assert result == "error: content must be a string"
     assert not path.parent.exists()
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "expected_title"),
+    [
+        ("read_file", "ReadFileArguments"),
+        ("write_file", "WriteFileArguments"),
+        ("edit_file", "EditFileArguments"),
+    ],
+)
+def test_advertised_schema_keeps_descriptive_model_title(
+    tool_name: str, expected_title: str
+) -> None:
+    # Given: the advertised schema for a built-in file tool.
+    function_schema = next(
+        tool["function"]
+        for tool in AGENT_TOOLS
+        if tool["type"] == "function" and tool["function"]["name"] == tool_name
+    )
+
+    # When: the provider-visible parameter schema is inspected.
+    parameters_schema = function_schema["parameters"]
+
+    # Then: its descriptive schema title is stable.
+    assert parameters_schema["title"] == expected_title
+
+
+def test_edit_file_model_schema_keeps_descriptive_text_edit_title() -> None:
+    # Given: the internal edit-file argument model.
+    parameters_schema = _EditFileArguments.model_json_schema()
+
+    # When: the edit-item schema reference is resolved.
+    text_edit_reference = parameters_schema["properties"]["edits"]["items"]["$ref"]
+    definition_name = text_edit_reference.rsplit("/", maxsplit=1)[-1]
+    text_edit_schema = parameters_schema["$defs"][definition_name]
+
+    # Then: the provider sees the descriptive model title.
+    assert text_edit_schema["title"] == "TextEdit"
