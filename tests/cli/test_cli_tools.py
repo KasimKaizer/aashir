@@ -127,7 +127,7 @@ def test_main_returns_tool_result_to_provider_after_round_trip(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     # Given: a UTF-8 file that the advertised read_file tool can access.
-    (tmp_path / "note.txt").write_text("café\n", encoding="utf-8")
+    (tmp_path / "note.txt").write_text("café\n", encoding="utf-8", newline="")
 
     # When: the CLI completes a read_file round-trip.
     _, follow_up_request = run_tool_round_trip(

@@ -24,7 +24,7 @@ def test_read_file_tool_returns_text_from_requested_file(
 ) -> None:
     # Given: a UTF-8 file in the tool's working directory.
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "note.txt").write_text("café\n", encoding="utf-8")
+    (tmp_path / "note.txt").write_text("café\n", encoding="utf-8", newline="")
 
     # When: the read tool opens the file.
     result = execute_tool_call("read_file", json.dumps({"file_path": "note.txt"}))

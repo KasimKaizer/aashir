@@ -22,8 +22,8 @@ def test_run_agent_assembles_fragmented_interleaved_tool_calls_in_completion_ord
 ) -> None:
     # Given: interleaved file calls arrive in fragments, and one starts without a function.
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "a.txt").write_text("alpha\n", encoding="utf-8")
-    (tmp_path / "b.txt").write_text("beta\n", encoding="utf-8")
+    (tmp_path / "a.txt").write_text("alpha\n", encoding="utf-8", newline="")
+    (tmp_path / "b.txt").write_text("beta\n", encoding="utf-8", newline="")
     args_a = json.dumps({"file_path": "a.txt"})
     args_b = json.dumps({"file_path": "b.txt"})
     split_a = len(args_a) // 2

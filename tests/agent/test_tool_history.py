@@ -22,7 +22,7 @@ def test_run_agent_preserves_tool_history_and_emits_lifecycle_events_in_order(
 ) -> None:
     # Given: a real file tool and a two-request provider exchange.
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "note.txt").write_text("café\n", encoding="utf-8")
+    (tmp_path / "note.txt").write_text("café\n", encoding="utf-8", newline="")
     tool_delta = {
         "role": "assistant",
         "tool_calls": [
