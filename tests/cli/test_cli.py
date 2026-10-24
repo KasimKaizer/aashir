@@ -87,6 +87,17 @@ def test_main_reports_unsupported_reasoning_effort_cleanly(
     )
 
 
+def test_parse_reasoning_effort_returns_none_when_unset() -> None:
+    # Given: no configured reasoning effort.
+    value = None
+
+    # When: the CLI parses the setting.
+    result = cli._parse_reasoning_effort(value)
+
+    # Then: no reasoning effort is requested.
+    assert result is None
+
+
 @pytest.mark.parametrize(
     ("prompt_path", "prompt_content", "warning_expected"),
     [
