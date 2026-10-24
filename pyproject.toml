@@ -32,6 +32,21 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.coverage.run]
+branch = true
+source = ["src/aashir"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 95
+exclude_also = [
+  '^\s*case unreachable:',
+  '^\s*assert_never\(',
+  '^\s*if __name__ == .__main__.:',
+  '^\s*raise NotImplementedError\b',
+  '^\s*@overload',
+]
+
 [tool.pyrefly]
 preset = "strict"
 search-path = ["."]
