@@ -159,29 +159,3 @@ jobs:
       - name: Smoke test sdist
         shell: bash
         run: uv run --isolated --no-project --with dist/*.tar.gz aashir -h
-
-  ci:
-    name: CI gate
-    if: always()
-    needs: [quality, tests, build, smoke]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Verify required jobs succeeded
-        run: |
-          if [ "${{ needs.quality.result }}" != "success" ]; then
-            echo "quality: ${{ needs.quality.result }}"
-            exit 1
-          fi
-          if [ "${{ needs.tests.result }}" != "success" ]; then
-            echo "tests: ${{ needs.tests.result }}"
-            exit 1
-          fi
-          if [ "${{ needs.build.result }}" != "success" ]; then
-            echo "build: ${{ needs.build.result }}"
-            exit 1
-          fi
-          if [ "${{ needs.smoke.result }}" != "success" ]; then
-            echo "smoke: ${{ needs.smoke.result }}"
-            exit 1
-          fi
