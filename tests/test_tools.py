@@ -19,21 +19,23 @@ def test_execute_tool_call_rejects_malformed_or_non_object_arguments(
     assert result.startswith("error:")
 
 
-def test_read_file_tool_returns_text_from_requested_file(
+def test_read_file_tool_returns_every_line_as_numbered_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Given: a UTF-8 file in the tool's working directory.
+    # Given: a UTF-8 file whose final line has no trailing newline.
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "note.txt").write_text("café\n", encoding="utf-8", newline="")
+    (tmp_path / "note.txt").write_bytes("alpha\nbeta\ncafé".encode())
 
-    # When: the read tool opens the file.
+    # When: the read tool opens the whole file.
     result = execute_tool_call("read_file", json.dumps({"file_path": "note.txt"}))
 
-    # Then: it returns the original text.
-    assert result == "café\n"
+    # Then: each line is N:text without the file path or a trailing newline.
+    assert result == "1:alpha\n2:beta\n3:café"
 
 
-def test_read_file_preserves_crlf_line_endings(tmp_path: Path) -> None:
+def test_read_file_numbers_crlf_lines_without_carriage_returns(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "note.txt"
     # Given: a file with CRLF line endings.
     path.write_bytes(b"first\r\nsecond\r\n")
@@ -41,8 +43,89 @@ def test_read_file_preserves_crlf_line_endings(tmp_path: Path) -> None:
     # When: the read tool opens the file.
     result = execute_tool_call("read_file", json.dumps({"file_path": str(path)}))
 
-    # Then: the line endings are returned unchanged.
-    assert result == "first\r\nsecond\r\n"
+    # Then: line endings are not part of the numbered text.
+    assert result == "1:first\n2:second"
+
+
+@pytest.fixture
+def numbered_file(tmp_path: Path) -> Path:
+    path = tmp_path / "numbered.txt"
+    path.write_bytes(b"alpha\nbeta\ngamma\ndelta\nepsilon")
+    return path
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        ({"offset": 2, "limit": 2}, "2:beta\n3:gamma"),
+        ({"offset": 4}, "4:delta\n5:epsilon"),
+        ({"limit": 2}, "1:alpha\n2:beta"),
+        ({"offset": 4, "limit": 10}, "4:delta\n5:epsilon"),
+        ({"offset": 5, "limit": 1}, "5:epsilon"),
+        ({"offset": 6}, ""),
+        ({"offset": 99, "limit": 3}, ""),
+    ],
+)
+def test_read_file_returns_requested_line_range_with_original_numbers(
+    numbered_file: Path, arguments: dict[str, int], expected: str
+) -> None:
+    # Given: a five-line file and an offset/limit request.
+    raw_arguments = json.dumps({"file_path": str(numbered_file), **arguments})
+
+    # When: the read tool selects the range.
+    result = execute_tool_call("read_file", raw_arguments)
+
+    # Then: only the available requested lines are returned with source numbers.
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{}, {"offset": 1}, {"limit": 1}, {"offset": 1, "limit": 1}],
+)
+def test_read_file_returns_empty_text_for_empty_file(
+    tmp_path: Path, arguments: dict[str, int]
+) -> None:
+    # Given: an empty file.
+    path = tmp_path / "empty.txt"
+    path.write_bytes(b"")
+
+    # When: the read tool reads it with or without a range.
+    result = execute_tool_call(
+        "read_file", json.dumps({"file_path": str(path), **arguments})
+    )
+
+    # Then: the read succeeds with empty text and no invented line.
+    assert result == ""
+
+
+@pytest.mark.parametrize("argument_name", ["offset", "limit"])
+@pytest.mark.parametrize("value", [0, -1, 1.5, 1.0, "2", True, [], {}])
+def test_read_file_rejects_invalid_range_arguments(
+    numbered_file: Path, argument_name: str, value: object
+) -> None:
+    # Given: a range argument that is not a positive integer.
+    raw_arguments = json.dumps({"file_path": str(numbered_file), argument_name: value})
+
+    # When: the read tool validates the request.
+    result = execute_tool_call("read_file", raw_arguments)
+
+    # Then: it reports the argument instead of selecting different lines.
+    assert result == f"error: {argument_name} must be a positive integer"
+
+
+def test_read_file_reads_only_the_requested_span(tmp_path: Path) -> None:
+    # Given: a file with invalid UTF-8 far beyond the requested lines.
+    path = tmp_path / "large.txt"
+    path.write_bytes(b"first\nsecond\n" + b"x\n" * 100_000 + b"\xff\n")
+
+    # When: the read tool requests only the first two lines.
+    result = execute_tool_call(
+        "read_file", json.dumps({"file_path": str(path), "limit": 2})
+    )
+
+    # Then: the unread tail is never decoded.
+    assert result == "1:first\n2:second"
 
 
 def test_write_file_creates_file_in_missing_directories(

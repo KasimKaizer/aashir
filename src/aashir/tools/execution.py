@@ -1,5 +1,6 @@
 """Tool dispatch and local file operations for the agent."""
 
+import itertools
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,8 @@ def _file_validation_error_message(error: ValidationError) -> str:
     match issue["loc"]:
         case ("file_path",):
             return "error: file_path must be a non-empty string"
+        case ("offset",) | ("limit",):
+            return f"error: {issue['loc'][0]} must be a positive integer"
         case ("content",):
             return "error: content must be a string"
         case ("edits",):
@@ -93,18 +96,34 @@ class _ToolDefinition[ArgumentsT: _ToolArguments]:
 
 
 def _execute_read(arguments: _ReadFileArguments) -> str:
-    """Read UTF-8 text while preserving the file's newline sequences.
+    """Read a span of a UTF-8 file as ``N:text`` lines.
+
+    Only the lines up to the end of the requested span are read. Line endings
+    (``\\n``, ``\\r\\n`` or ``\\r``) are not part of the returned text.
 
     Args:
-        arguments: Validated tool arguments containing ``file_path``.
+        arguments: Validated file path with optional 1-based ``offset`` and ``limit``.
 
     Returns:
-        File contents, or error text if the path or file cannot be read.
+        The selected lines joined by newlines, empty text when the span has no
+        lines, or error text if the path or file cannot be read.
     """
+    first_line_number = 1 if arguments.offset is None else arguments.offset
+    stop_index = (
+        None if arguments.limit is None else first_line_number - 1 + arguments.limit
+    )
     try:
-        return Path(arguments.file_path).read_text(encoding="utf-8", newline="")
+        with Path(arguments.file_path).open(encoding="utf-8") as file:
+            selected_lines = itertools.islice(file, first_line_number - 1, stop_index)
+            numbered_lines = [
+                f"{line_number}:{line.removesuffix('\n')}"
+                for line_number, line in enumerate(
+                    selected_lines, start=first_line_number
+                )
+            ]
     except (UnicodeError, OSError) as error:
         return f"error: {error}"
+    return "\n".join(numbered_lines)
 
 
 # TODO: Revisit atomic replacement for both file-writing tools after deciding how
@@ -188,7 +207,11 @@ def _execute_edit(arguments: _EditFileArguments) -> str:
 _TOOL_DEFINITIONS: Final = (
     _ToolDefinition(
         name="read_file",
-        description="Read and return the contents of a file",
+        description=(
+            "Read a file. Every returned line is formatted as N:text, "
+            "where N is its 1-based line number. Use offset and limit to read a "
+            "range of lines instead of the whole file."
+        ),
         arguments_model=_ReadFileArguments,
         execute=_execute_read,
         validation_error_formatter=_file_validation_error_message,

@@ -97,6 +97,12 @@ def test_main_sends_configured_request_and_advertises_tools(
     for tool_name in ("read_file", "write_file", "edit_file"):
         assert tool_parameters[tool_name]["properties"]["file_path"]["minLength"] == 1
 
+    read_parameters = tool_parameters["read_file"]
+    assert read_parameters["required"] == ["file_path"]
+    for range_argument in ("offset", "limit"):
+        range_options = read_parameters["properties"][range_argument]["anyOf"]
+        assert {"type": "integer", "minimum": 1} in range_options
+
     parameters = tool_parameters["edit_file"]
     assert parameters["additionalProperties"] is False
     assert {"file_path", "edits"} <= set(parameters["required"])
@@ -141,5 +147,5 @@ def test_main_returns_tool_result_to_provider_after_round_trip(
     assert assistant_message["role"] == "assistant"
     assert tool_result["role"] == "tool"
     assert tool_result["tool_call_id"] == assistant_message["tool_calls"][0]["id"]
-    assert tool_result["content"] == "café\n"
+    assert tool_result["content"] == "1:café"
     assert capsys.readouterr().out == "Done"

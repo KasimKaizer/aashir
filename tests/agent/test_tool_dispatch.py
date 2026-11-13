@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 from openai.types.chat import ChatCompletionMessageParam
@@ -143,15 +144,10 @@ def test_execute_tool_calls_converts_tool_exceptions_to_one_error_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: a read tool call and an unexpected failure at the file-read boundary.
-    def fail_read(
-        path: Path,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
-    ) -> str:
+    def fail_open(path: Path, mode: str = "r", encoding: str | None = None) -> NoReturn:
         raise RuntimeError("unexpected tool failure")
 
-    monkeypatch.setattr(Path, "read_text", fail_read)
+    monkeypatch.setattr(Path, "open", fail_open)
     call = _ToolCallAccumulator(
         call_id="call_failed",
         name="read_file",

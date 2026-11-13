@@ -131,8 +131,8 @@ def test_run_agent_assembles_fragmented_interleaved_tool_calls_in_completion_ord
 
     results = [event for event in events if isinstance(event, ToolResult)]
     assert [(event.call_id, event.output) for event in results] == [
-        ("call_0", "alpha\n"),
-        ("call_1", "beta\n"),
+        ("call_0", "1:alpha"),
+        ("call_1", "1:beta"),
     ]
     assert (
         "".join(event.text for event in events if isinstance(event, AnswerDelta))
@@ -156,10 +156,10 @@ def test_run_agent_assembles_fragmented_interleaved_tool_calls_in_completion_ord
     assert messages[-2] == {
         "role": "tool",
         "tool_call_id": "call_0",
-        "content": "alpha\n",
+        "content": "1:alpha",
     }
     assert messages[-1] == {
         "role": "tool",
         "tool_call_id": "call_1",
-        "content": "beta\n",
+        "content": "1:beta",
     }

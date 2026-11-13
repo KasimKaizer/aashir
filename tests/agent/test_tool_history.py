@@ -104,7 +104,7 @@ def test_run_agent_preserves_tool_history_and_emits_lifecycle_events_in_order(
 
     results = [event for event in events if isinstance(event, ToolResult)]
     assert [(event.call_id, event.name, event.output) for event in results] == [
-        ("call_tool", "read_file", "café\n"),
+        ("call_tool", "read_file", "1:café"),
         ("call_unknown", "unknown_tool", "error: unknown tool called"),
     ]
 
@@ -119,7 +119,7 @@ def test_run_agent_preserves_tool_history_and_emits_lifecycle_events_in_order(
         "call_unknown",
     ]
     assert tool_results == [
-        {"role": "tool", "tool_call_id": "call_tool", "content": "café\n"},
+        {"role": "tool", "tool_call_id": "call_tool", "content": "1:café"},
         {
             "role": "tool",
             "tool_call_id": "call_unknown",

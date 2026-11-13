@@ -23,6 +23,20 @@ class _ReadFileArguments(_ToolArguments):
             description="Path to the file to read (relative or absolute)",
         ),
     ]
+    offset: Annotated[
+        int | None,
+        Field(
+            ge=1,
+            description="First line to return, counting from 1. Defaults to line 1.",
+        ),
+    ] = None
+    limit: Annotated[
+        int | None,
+        Field(
+            ge=1,
+            description="Maximum number of lines to return. Defaults to all lines.",
+        ),
+    ] = None
 
 
 class _WriteFileArguments(_ToolArguments):
