@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -64,6 +65,10 @@ def numbered_file(tmp_path: Path) -> Path:
         ({"offset": 5, "limit": 1}, "5:epsilon"),
         ({"offset": 6}, ""),
         ({"offset": 99, "limit": 3}, ""),
+        ({"limit": 10**30}, "1:alpha\n2:beta\n3:gamma\n4:delta\n5:epsilon"),
+        ({"offset": 2, "limit": sys.maxsize}, "2:beta\n3:gamma\n4:delta\n5:epsilon"),
+        ({"offset": 10**30}, ""),
+        ({"offset": 10**30, "limit": 10**30}, ""),
     ],
 )
 def test_read_file_returns_requested_line_range_with_original_numbers(

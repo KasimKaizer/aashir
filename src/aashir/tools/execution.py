@@ -1,6 +1,7 @@
 """Tool dispatch and local file operations for the agent."""
 
 import itertools
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -109,12 +110,16 @@ def _execute_read(arguments: _ReadFileArguments) -> str:
         lines, or error text if the path or file cannot be read.
     """
     first_line_number = 1 if arguments.offset is None else arguments.offset
-    stop_index = (
-        None if arguments.limit is None else first_line_number - 1 + arguments.limit
-    )
+    start_index = first_line_number - 1
+    stop_index = None if arguments.limit is None else start_index + arguments.limit
     try:
         with Path(arguments.file_path).open(encoding="utf-8") as file:
-            selected_lines = itertools.islice(file, first_line_number - 1, stop_index)
+            # islice rejects indexes above sys.maxsize, a line count no file reaches.
+            selected_lines = itertools.islice(
+                file,
+                min(start_index, sys.maxsize),
+                None if stop_index is None else min(stop_index, sys.maxsize),
+            )
             numbered_lines = [
                 f"{line_number}:{line.removesuffix('\n')}"
                 for line_number, line in enumerate(
