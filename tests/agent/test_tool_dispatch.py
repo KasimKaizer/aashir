@@ -8,8 +8,9 @@ from openai.types.chat import ChatCompletionMessageParam
 from aashir.agent.contracts import ToolResult
 from aashir.agent.tool_calls import _execute_tool_calls, _ToolCallAccumulator
 from aashir.tools import AGENT_TOOLS, execute_tool_call
-from aashir.tools.execution import _TOOL_DEFINITIONS, _ToolDefinition
-from aashir.tools.schemas import _EditFileArguments, _ToolArguments
+from aashir.tools.base import _ToolArguments, _ToolDefinition
+from aashir.tools.edit_file import _EditFileArguments
+from aashir.tools.registry import _TOOL_DEFINITIONS
 
 
 class SearchArguments(_ToolArguments):
