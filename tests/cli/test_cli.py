@@ -1,6 +1,6 @@
 """CLI entrypoint behavior: validation, streaming, and answer presentation."""
 
-import json
+import io
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -19,38 +19,44 @@ from aashir.agent import (
     ToolResult,
     TurnCompleted,
 )
+from tests.helpers import (
+    ClientSettings,
+    make_openai_client,
+    sse_body,
+    sse_chunk,
+    sse_chunk_without_choices,
+)
+
+_ALL_REQUIRED_VARIABLES = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "BASE_MODEL_NAME")
 
 
 @pytest.mark.parametrize(
-    ("api_key", "base_url", "model_name", "reasoning_effort", "expected_missing"),
+    ("blanked_variables", "unset", "expected_missing"),
     [
-        (None, "https://example.invalid/v1", "test-model", "medium", "OPENAI_API_KEY"),
-        ("", "https://example.invalid/v1", "test-model", "medium", "OPENAI_API_KEY"),
+        (("OPENAI_API_KEY",), True, "OPENAI_API_KEY"),
+        (("OPENAI_API_KEY",), False, "OPENAI_API_KEY"),
         (
-            None,
-            "",
-            None,
-            "",
-            "OPENAI_API_KEY, OPENAI_BASE_URL, BASE_MODEL_NAME, REASONING_EFFORT",
+            _ALL_REQUIRED_VARIABLES,
+            False,
+            "OPENAI_API_KEY, OPENAI_BASE_URL, BASE_MODEL_NAME",
         ),
     ],
+    ids=("unset-key", "empty-key", "all-empty"),
 )
+@pytest.mark.usefixtures("configured_cli")
 def test_main_reports_missing_settings_when_required_values_are_unset_or_empty(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    api_key: str | None,
-    base_url: str,
-    model_name: str | None,
-    reasoning_effort: str | None,
+    blanked_variables: tuple[str, ...],
+    unset: bool,
     expected_missing: str,
 ) -> None:
-    # Given: incomplete required settings and a valid prompt argument.
-    monkeypatch.setattr(sys, "argv", ["aashir", "-p", "hello"])
-    monkeypatch.setenv("OPENAI_API_KEY", api_key or "")
-    monkeypatch.setenv("OPENAI_BASE_URL", base_url)
-    monkeypatch.setenv("BASE_MODEL_NAME", model_name or "")
-    monkeypatch.setenv("SYSTEM_PROMPT_FILE", "prompt.txt")
-    monkeypatch.setenv("REASONING_EFFORT", reasoning_effort or "")
+    # Given: valid settings except for the blanked required values.
+    for name in blanked_variables:
+        if unset:
+            monkeypatch.delenv(name)
+        else:
+            monkeypatch.setenv(name, "")
 
     # When: the CLI validates its configuration.
     with pytest.raises(SystemExit) as error:
@@ -63,16 +69,12 @@ def test_main_reports_missing_settings_when_required_values_are_unset_or_empty(
     )
 
 
+@pytest.mark.usefixtures("configured_cli")
 def test_main_reports_unsupported_reasoning_effort_cleanly(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     # Given: complete settings with an unsupported reasoning-effort value.
-    monkeypatch.setattr(sys, "argv", ["aashir", "-p", "hello"])
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
-    monkeypatch.setenv("BASE_MODEL_NAME", "test-model")
-    monkeypatch.setenv("SYSTEM_PROMPT_FILE", "")
     monkeypatch.setenv("REASONING_EFFORT", "unsupported")
 
     # When: the CLI validates its configuration.
@@ -87,10 +89,11 @@ def test_main_reports_unsupported_reasoning_effort_cleanly(
     )
 
 
-def test_parse_reasoning_effort_returns_none_when_unset() -> None:
-    # Given: no configured reasoning effort.
-    value = None
-
+@pytest.mark.parametrize(("value",), [(None,), ("",)], ids=("unset", "empty"))
+def test_parse_reasoning_effort_returns_none_when_unset_or_empty(
+    value: str | None,
+) -> None:
+    # Given: a reasoning effort that is unset or empty.
     # When: the CLI parses the setting.
     result = cli._parse_reasoning_effort(value)
 
@@ -99,32 +102,24 @@ def test_parse_reasoning_effort_returns_none_when_unset() -> None:
 
 
 @pytest.mark.parametrize(
-    ("prompt_path", "prompt_content", "warning_expected"),
-    [
-        (None, None, False),
-        ("missing.txt", None, True),
-        ("empty.txt", "", False),
-    ],
+    ("prompt_file_name", "warning_expected"),
+    [(None, False), ("missing.txt", True), ("empty.txt", False)],
+    ids=("no-file", "missing-file", "empty-file"),
 )
+@pytest.mark.usefixtures("configured_cli")
 def test_configure_request_uses_default_prompt_without_nonempty_custom_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    prompt_path: str | None,
-    prompt_content: str | None,
+    prompt_file_name: str | None,
     warning_expected: bool,
 ) -> None:
     # Given: valid settings with no prompt, a missing file, or an empty file.
-    monkeypatch.setattr(sys, "argv", ["aashir", "-p", "hello"])
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
-    monkeypatch.setenv("BASE_MODEL_NAME", "test-model")
-    monkeypatch.setenv("REASONING_EFFORT", "medium")
-    prompt_file = None if prompt_path is None else tmp_path / prompt_path
-    if prompt_file is not None and prompt_content is not None:
-        prompt_file.write_text(prompt_content, encoding="utf-8")
-    system_prompt = "" if prompt_file is None else str(prompt_file)
-    monkeypatch.setenv("SYSTEM_PROMPT_FILE", system_prompt)
+    (tmp_path / "empty.txt").write_text("", encoding="utf-8")
+    if prompt_file_name is None:
+        monkeypatch.delenv("SYSTEM_PROMPT_FILE")
+    else:
+        monkeypatch.setenv("SYSTEM_PROMPT_FILE", str(tmp_path / prompt_file_name))
 
     # When: the CLI builds its agent request from the current settings.
     request = cli._configure_request(cli._load_settings())
@@ -161,147 +156,99 @@ def test_main_requires_prompt_argument_when_option_is_omitted(
     assert "arguments are required: -p" in capsys.readouterr().err
 
 
-def _chunk(
-    content: str | None = None,
-    *,
-    finish_reason: str | None = None,
-    empty_choices: bool = False,
-) -> bytes:
-    choices = (
-        []
-        if empty_choices
-        else [
-            {
-                "index": 0,
-                "delta": {"content": content},
-                "finish_reason": finish_reason,
-            }
-        ]
-    )
-    payload = {
-        "id": "chatcmpl-test",
-        "object": "chat.completion.chunk",
-        "created": 0,
-        "model": "test-model",
-        "choices": choices,
-    }
-    return f"data: {json.dumps(payload)}\n\n".encode()
-
-
-@pytest.fixture
-def mock_streaming_api(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> Callable[[httpx2.SyncByteStream], httpx2.Client]:
-    monkeypatch.setattr(sys, "argv", ["aashir", "-p", "hello"])
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
-    monkeypatch.setenv("BASE_MODEL_NAME", "test-model")
-    prompt_file = tmp_path / "prompt.txt"
-    prompt_file.write_text("You are a test assistant.", encoding="utf-8")
-    monkeypatch.setenv("SYSTEM_PROMPT_FILE", str(prompt_file))
-    monkeypatch.setenv("REASONING_EFFORT", "medium")
-
-    def install(stream: httpx2.SyncByteStream) -> httpx2.Client:
-        def respond(_request: httpx2.Request) -> httpx2.Response:
-            return httpx2.Response(
-                200,
-                headers={"content-type": "text/event-stream"},
-                stream=stream,
-            )
-
-        http_client = httpx2.Client(transport=httpx2.MockTransport(respond))
-
-        def make_client(*, api_key: str, base_url: str) -> OpenAI:
-            return OpenAI(
-                api_key=api_key,
-                base_url=base_url,
-                max_retries=0,
-                http_client=http_client,
-            )
-
-        monkeypatch.setattr(cli, "OpenAI", make_client)
-        return http_client
-
-    return install
-
-
+@pytest.mark.usefixtures("configured_cli")
 def test_main_closes_http_client_after_streaming(
-    mock_streaming_api: Callable[[httpx2.SyncByteStream], httpx2.Client],
+    serve_provider: Callable[[OpenAI], list[ClientSettings]],
 ) -> None:
-    # Given: a successful provider stream and its underlying HTTP client.
-    http_client = mock_streaming_api(
-        httpx2.ByteStream(_chunk("Done", finish_reason="stop") + b"data: [DONE]\n\n")
-    )
+    # Given: a successful provider stream and the client that serves it.
+    body = sse_body(sse_chunk({"content": "Done"}, finish_reason="stop"))
+    client = make_openai_client(httpx2.ByteStream(body))
+    serve_provider(client)
 
     # When: the CLI consumes the complete stream.
-    try:
-        cli.main()
-    finally:
-        client_was_closed = http_client.is_closed
-        http_client.close()
+    cli.main()
 
-    # Then: the CLI closes the HTTP client after the run.
-    assert client_was_closed
+    # Then: the CLI closed the client after the run.
+    assert client.is_closed()
 
 
-def test_main_prints_answer_before_stream_finishes_when_provider_sends_chunks(
-    mock_streaming_api: Callable[[httpx2.SyncByteStream], None],
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.usefixtures("configured_cli")
+def test_main_creates_the_provider_client_from_its_settings(
+    serve_provider: Callable[[OpenAI], list[ClientSettings]],
 ) -> None:
-    # Given: a provider stream that yields answer text in separate chunks.
-    observed_before_finish: list[str] = []
+    # Given: valid settings and a provider that answers immediately.
+    body = sse_body(sse_chunk({"content": "Done"}, finish_reason="stop"))
+    created_with = serve_provider(make_openai_client(httpx2.ByteStream(body)))
+
+    # When: the CLI runs.
+    cli.main()
+
+    # Then: the client was created from the configured key and base URL.
+    assert created_with == [("test-key", "https://example.invalid/v1")]
+
+
+@pytest.mark.usefixtures("configured_cli")
+def test_main_flushes_each_answer_chunk_before_the_stream_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+    serve_provider: Callable[[OpenAI], list[ClientSettings]],
+) -> None:
+    # Given: a stdout that keeps text buffered until flushed (like a real pipe),
+    # and a provider stream that records what reached the pipe after its first chunk.
+    pipe = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(pipe, encoding="utf-8"))
+    flushed_after_first_chunk: list[bytes] = []
 
     class StreamingBody(httpx2.SyncByteStream):
         @override
         def __iter__(self) -> Iterator[bytes]:
-            yield _chunk("Hel")
-            observed_before_finish.append(capsys.readouterr().out)
-            assert observed_before_finish[-1] == "Hel"
-            yield _chunk(empty_choices=True)
-            yield _chunk("lo", finish_reason="stop")
-            yield b"data: [DONE]\n\n"
+            yield sse_chunk({"content": "Hel"})
+            yield sse_chunk_without_choices()
+            flushed_after_first_chunk.append(pipe.getvalue())
+            yield sse_chunk({"content": "lo"}, finish_reason="stop")
+            yield sse_body()
 
-    mock_streaming_api(StreamingBody())
+    serve_provider(make_openai_client(StreamingBody()))
 
     # When: the CLI consumes the stream.
     cli.main()
 
-    # Then: the first fragment was already visible and all answer text was printed.
-    output = "".join(observed_before_finish) + capsys.readouterr().out
-    assert output == "Hello"
+    # Then: the first fragment had already been flushed, and all text arrived.
+    assert flushed_after_first_chunk == [b"Hel"]
+    sys.stdout.flush()
+    assert pipe.getvalue() == b"Hello"
 
 
+@pytest.mark.usefixtures("configured_cli")
 def test_main_reports_provider_stream_without_choices_cleanly(
-    mock_streaming_api: Callable[[httpx2.SyncByteStream], None],
+    serve_provider: Callable[[OpenAI], list[ClientSettings]],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     # Given: a provider stream with no completion choices.
-    mock_streaming_api(
-        httpx2.ByteStream(_chunk(empty_choices=True) + b"data: [DONE]\n\n")
-    )
+    body = sse_body(sse_chunk_without_choices())
+    serve_provider(make_openai_client(httpx2.ByteStream(body)))
 
     # When: the CLI consumes the invalid stream.
     with pytest.raises(SystemExit) as error:
         cli.main()
-    captured = capsys.readouterr()
 
     # Then: it exits unsuccessfully and reports a concise protocol error.
     assert error.value.code == 1
     assert (
-        captured.err
+        capsys.readouterr().err
         == "error: protocol: provider stream contained no completion choices\n"
     )
 
 
+@pytest.mark.usefixtures("configured_cli")
 def test_main_preserves_partial_answer_when_provider_returns_error(
-    mock_streaming_api: Callable[[httpx2.SyncByteStream], None],
+    serve_provider: Callable[[OpenAI], list[ClientSettings]],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     # Given: a provider stream that emits answer text before an API error.
-    body = _chunk("Partial") + (
-        b'data: {"error": {"message": "stream failed", "type": "server_error"}}\n\n'
+    body = sse_chunk({"content": "Partial"}) + sse_chunk_without_choices(
+        error={"message": "stream failed", "type": "server_error"}
     )
-    mock_streaming_api(httpx2.ByteStream(body))
+    serve_provider(make_openai_client(httpx2.ByteStream(body)))
 
     # When: the CLI consumes the failed stream.
     with pytest.raises(SystemExit) as error:

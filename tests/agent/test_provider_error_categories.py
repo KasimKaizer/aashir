@@ -10,8 +10,14 @@ from openai import (
     RateLimitError,
 )
 
-from aashir.agent import AgentRequest, ProviderError, run_agent
-from tests.helpers import make_failing_openai_client, make_openai_client, sse_chunk
+from aashir.agent import ProviderError, run_agent
+from tests.helpers import (
+    make_agent_request,
+    make_failing_openai_client,
+    make_openai_client,
+    sse_body,
+    sse_chunk,
+)
 
 
 @pytest.mark.parametrize(
@@ -34,16 +40,14 @@ def test_run_agent_normalizes_provider_error_categories(
     error_payload = {"message": "provider failed", "type": provider_type}
     if provider_code is not None:
         error_payload["code"] = provider_code
-    body = sse_chunk({}, error=error_payload) + b"data: [DONE]\n\n"
+    body = sse_body(sse_chunk({}, error=error_payload))
     with (
         make_openai_client(httpx2.ByteStream(body)) as client,
         pytest.raises(ProviderError) as error,
     ):
         events = run_agent(
             client,
-            AgentRequest(
-                model="test-model", messages=[{"role": "user", "content": "hi"}]
-            ),
+            make_agent_request(),
         )
 
         # When: the consumer iterates the provider stream.
@@ -85,9 +89,7 @@ def test_run_agent_normalizes_sdk_status_error_classes(
     with make_failing_openai_client(error) as client:
         events = run_agent(
             client,
-            AgentRequest(
-                model="test-model", messages=[{"role": "user", "content": "hi"}]
-            ),
+            make_agent_request(),
         )
         with pytest.raises(ProviderError) as raised:
             list(events)
@@ -99,7 +101,7 @@ def test_run_agent_normalizes_sdk_status_error_classes(
     assert raised.value.__cause__ is error
 
 
-@pytest.mark.parametrize("error_class", [APIConnectionError, APITimeoutError])
+@pytest.mark.parametrize(("error_class",), [(APIConnectionError,), (APITimeoutError,)])
 def test_run_agent_normalizes_sdk_connection_error_classes(
     error_class: type[APIConnectionError],
 ) -> None:
@@ -114,9 +116,7 @@ def test_run_agent_normalizes_sdk_connection_error_classes(
     ):
         events = run_agent(
             client,
-            AgentRequest(
-                model="test-model", messages=[{"role": "user", "content": "hi"}]
-            ),
+            make_agent_request(),
         )
         list(events)
 

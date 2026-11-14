@@ -1,9 +1,7 @@
 import json
 from pathlib import Path
 
-import httpx2
 import pytest
-from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
 from aashir.agent import (
@@ -14,111 +12,87 @@ from aashir.agent import (
     run_agent,
 )
 from aashir.tools import AGENT_TOOLS
-from tests.helpers import sse_chunk
+from tests.helpers import (
+    make_round_trip_client,
+    run_tool_round_trip,
+    sse_body,
+    sse_chunk,
+    tool_call,
+)
 
 
-def test_run_agent_preserves_tool_history_and_emits_lifecycle_events_in_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.fixture
+def read_and_unknown_turn(tmp_path: Path) -> tuple[str, bytes]:
+    """A provider turn calling read_file on a real file, then an unknown tool.
+
+    Returns:
+        The file path the read_file call uses, and the provider's SSE body.
+    """
+    path = tmp_path / "note.txt"
+    path.write_text("café\n", encoding="utf-8", newline="")
+    calls = [
+        tool_call(0, "call_tool", "read_file", json.dumps({"file_path": str(path)})),
+        tool_call(1, "call_unknown", "unknown_tool", json.dumps({"unused": "value"})),
+    ]
+    delta = {"role": "assistant", "content": "Checking.", "tool_calls": calls}
+    return str(path), sse_body(sse_chunk(delta, finish_reason="tool_calls"))
+
+
+def test_run_agent_emits_each_tool_call_before_its_result_and_then_completes(
+    read_and_unknown_turn: tuple[str, bytes],
 ) -> None:
-    # Given: a real file tool and a two-request provider exchange.
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "note.txt").write_text("café\n", encoding="utf-8", newline="")
-    tool_delta = {
-        "role": "assistant",
-        "tool_calls": [
-            {
-                "index": 0,
-                "id": "call_tool",
-                "type": "function",
-                "function": {
-                    "name": "read_file",
-                    "arguments": json.dumps({"file_path": "note.txt"}),
-                },
-            },
-            {
-                "index": 1,
-                "id": "call_unknown",
-                "type": "function",
-                "function": {
-                    "name": "unknown_tool",
-                    "arguments": json.dumps({"unused": "value"}),
-                },
-            },
-        ],
-    }
-    requests: list[httpx2.Request] = []
+    # Given: a provider turn with a real file read and an unknown tool call.
+    path, first_turn = read_and_unknown_turn
 
-    def respond(request: httpx2.Request) -> httpx2.Response:
-        requests.append(request)
-        body = (
-            sse_chunk(tool_delta, finish_reason="tool_calls")
-            if len(requests) == 1
-            else sse_chunk({"content": "Done"}, finish_reason="stop")
-        )
-        return httpx2.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            content=body + b"data: [DONE]\n\n",
-        )
+    # When: the agent completes the tool round trip.
+    round_trip = run_tool_round_trip(first_turn)
 
-    # When: the agent completes a tool round trip.
-    initial_messages: list[ChatCompletionMessageParam] = [
-        {"role": "user", "content": "use a tool"}
-    ]
-    with OpenAI(
-        api_key="test-key",
-        base_url="https://example.invalid/v1",
-        max_retries=0,
-        http_client=httpx2.Client(transport=httpx2.MockTransport(respond)),
-    ) as client:
-        events = list(
-            run_agent(
-                client,
-                AgentRequest(
-                    model="test-model",
-                    messages=initial_messages,
-                    tools=AGENT_TOOLS,
-                ),
-            )
-        )
-
-    # Then: each call has a matching result before the turn completes.
+    # Then: each call is announced, then answered, in order, before completion.
     tool_events = [
-        event for event in events if isinstance(event, (ToolCallReceived, ToolResult))
+        event
+        for event in round_trip.events
+        if isinstance(event, (ToolCallReceived, ToolResult))
     ]
-    assert [(type(event), event.call_id) for event in tool_events] == [
-        (ToolCallReceived, "call_tool"),
-        (ToolResult, "call_tool"),
-        (ToolCallReceived, "call_unknown"),
-        (ToolResult, "call_unknown"),
+    assert tool_events == [
+        ToolCallReceived(
+            call_id="call_tool",
+            name="read_file",
+            arguments=json.dumps({"file_path": path}),
+        ),
+        ToolResult(call_id="call_tool", name="read_file", output="1:café"),
+        ToolCallReceived(
+            call_id="call_unknown",
+            name="unknown_tool",
+            arguments=json.dumps({"unused": "value"}),
+        ),
+        ToolResult(
+            call_id="call_unknown",
+            name="unknown_tool",
+            output="error: unknown tool called",
+        ),
     ]
-    assert isinstance(events[-1], TurnCompleted)
+    assert isinstance(round_trip.events[-1], TurnCompleted)
 
-    started = [event for event in events if isinstance(event, ToolCallReceived)]
-    assert [(event.call_id, event.name) for event in started] == [
-        ("call_tool", "read_file"),
-        ("call_unknown", "unknown_tool"),
-    ]
-    assert json.loads(started[0].arguments) == {"file_path": "note.txt"}
-    assert json.loads(started[1].arguments) == {"unused": "value"}
 
-    results = [event for event in events if isinstance(event, ToolResult)]
-    assert [(event.call_id, event.name, event.output) for event in results] == [
-        ("call_tool", "read_file", "1:café"),
-        ("call_unknown", "unknown_tool", "error: unknown tool called"),
-    ]
+def test_run_agent_sends_both_tool_calls_and_their_results_in_the_next_request(
+    read_and_unknown_turn: tuple[str, bytes],
+) -> None:
+    # Given: a provider turn with a real file read and an unknown tool call.
+    _, first_turn = read_and_unknown_turn
 
-    # Then: both assistant calls and their results are preserved for the next request.
-    assert len(requests) == 2
-    messages = json.loads(requests[1].content)["messages"]
+    # When: the agent completes the tool round trip.
+    round_trip = run_tool_round_trip(first_turn)
+
+    # Then: the follow-up request carries the assistant calls and both results.
+    messages = json.loads(round_trip.requests[1].content)["messages"]
     assistant_message = messages[-3]
-    tool_results = messages[-2:]
     assert assistant_message["role"] == "assistant"
+    assert assistant_message["content"] == "Checking."
     assert [call["id"] for call in assistant_message["tool_calls"]] == [
         "call_tool",
         "call_unknown",
     ]
-    assert tool_results == [
+    assert messages[-2:] == [
         {"role": "tool", "tool_call_id": "call_tool", "content": "1:café"},
         {
             "role": "tool",
@@ -126,4 +100,24 @@ def test_run_agent_preserves_tool_history_and_emits_lifecycle_events_in_order(
             "content": "error: unknown tool called",
         },
     ]
+
+
+def test_run_agent_does_not_change_the_callers_message_list(
+    read_and_unknown_turn: tuple[str, bytes],
+) -> None:
+    # Given: a request whose message list the caller keeps.
+    _, first_turn = read_and_unknown_turn
+    initial_messages: list[ChatCompletionMessageParam] = [
+        {"role": "user", "content": "use a tool"}
+    ]
+    request = AgentRequest(
+        model="test-model", messages=initial_messages, tools=AGENT_TOOLS
+    )
+    client, _ = make_round_trip_client(first_turn)
+
+    # When: the agent runs a tool round trip with it.
+    with client:
+        list(run_agent(client, request))
+
+    # Then: the caller's list is untouched.
     assert initial_messages == [{"role": "user", "content": "use a tool"}]
