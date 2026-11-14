@@ -233,6 +233,62 @@ def test_edit_file_preserves_crlf_line_endings(tmp_path: Path) -> None:
     assert path.read_bytes() == b"before\r\ntarget=new\r\nafter\r\n"
 
 
+@pytest.mark.parametrize(("file_newline",), [("\n",), ("\r\n",), ("\r",)])
+@pytest.mark.parametrize(("edit_newline",), [("\n",), ("\r\n",)])
+def test_edit_file_ignores_line_ending_style_when_matching_and_keeps_the_files(
+    tmp_path: Path, file_newline: str, edit_newline: str
+) -> None:
+    # Given: a file with one newline style and a multi-line edit in either style.
+    path = tmp_path / "note.txt"
+    path.write_bytes(f"a{file_newline}b{file_newline}c{file_newline}".encode())
+    arguments = json.dumps(
+        {
+            "file_path": str(path),
+            "edits": [
+                {
+                    "old_text": f"a{edit_newline}b",
+                    "new_text": f"x{edit_newline}y{edit_newline}z",
+                }
+            ],
+        }
+    )
+
+    # When: the edit tool applies it.
+    result = execute_tool_call("edit_file", arguments)
+
+    # Then: the edit matches, and the file keeps its own newline style.
+    expected = f"x{file_newline}y{file_newline}z{file_newline}c{file_newline}"
+    assert result.startswith("success:")
+    assert path.read_bytes() == expected.encode()
+
+
+@pytest.mark.parametrize(
+    ("old_text", "expected_success", "expected_bytes"),
+    [
+        ("a\nb", False, b"a\r\nb\nc"),
+        ("a\r\nb", True, b"X\nc"),
+        ("b\nc", True, b"a\r\nX"),
+    ],
+    ids=("lf-text-over-crlf-boundary", "exact-crlf-text", "exact-lf-text"),
+)
+def test_edit_file_matches_exactly_when_the_file_mixes_line_endings(
+    tmp_path: Path, old_text: str, expected_success: bool, expected_bytes: bytes
+) -> None:
+    # Given: a file that mixes CRLF and LF line endings.
+    path = tmp_path / "note.txt"
+    path.write_bytes(b"a\r\nb\nc")
+    arguments = json.dumps(
+        {"file_path": str(path), "edits": [{"old_text": old_text, "new_text": "X"}]}
+    )
+
+    # When: the edit tool applies a multi-line edit.
+    result = execute_tool_call("edit_file", arguments)
+
+    # Then: only text that matches the raw bytes is edited.
+    assert result.startswith("success:") is expected_success
+    assert path.read_bytes() == expected_bytes
+
+
 def test_edit_file_rejects_missing_match_without_partially_writing(
     tmp_path: Path,
 ) -> None:

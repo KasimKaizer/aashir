@@ -84,13 +84,32 @@ def _edit_validation_error_message(error: ValidationError) -> str:
             return _generic_validation_error_message(error)
 
 
+def _normalize_newlines(text: str) -> str:
+    """Convert every CRLF and CR in ``text`` to LF."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _single_newline_style(content: str) -> str | None:
+    """Return the file's newline sequence, or ``None`` if it has none or mixes them."""
+    crlf_count = content.count("\r\n")
+    counts_by_style = {
+        "\r\n": crlf_count,
+        "\n": content.count("\n") - crlf_count,
+        "\r": content.count("\r") - crlf_count,
+    }
+    used_styles = [style for style, count in counts_by_style.items() if count]
+    return used_styles[0] if len(used_styles) == 1 else None
+
+
 def _execute_edit(arguments: _EditFileArguments) -> str:
     """Apply exact, non-overlapping replacements to one UTF-8 file.
 
     Every ``old_text`` must occur exactly once in the original content. An empty
-    ``new_text`` deletes a match. The file is replaced only after all edits pass
-    validation, existing newline sequences are preserved, and the original bytes
-    stay in place if the replacement fails or is refused.
+    ``new_text`` deletes a match. If the file uses a single newline style (LF,
+    CRLF or CR), line endings are ignored when matching, and the edited file keeps
+    that style. A file with mixed line endings is matched exactly. The file is
+    replaced only after all edits pass validation, and the original bytes stay in
+    place if the replacement fails or is refused.
 
     Args:
         arguments: Validated file path and edit list.
@@ -107,9 +126,17 @@ def _execute_edit(arguments: _EditFileArguments) -> str:
     except (UnicodeError, OSError, _FileReplacementError) as error:
         return f"error: {error}"
 
+    # read_file output omits "\r", so models send "\n" even for CRLF files.
+    newline = _single_newline_style(content)
+    if newline is not None:
+        content = _normalize_newlines(content)
+
     spans: list[tuple[int, int, str]] = []
     for index, edit in enumerate(arguments.edits):
         old_text, new_text = edit.old_text, edit.new_text
+        if newline is not None:
+            old_text = _normalize_newlines(old_text)
+            new_text = _normalize_newlines(new_text)
         start = content.find(old_text)
         if start == -1:
             return f"error: edit at index {index} - 'old_text' not found in the file"
@@ -131,6 +158,9 @@ def _execute_edit(arguments: _EditFileArguments) -> str:
         parts.extend((content[pointer:start], new_text))
         pointer = end
     content = "".join((*parts, content[pointer:]))
+    if newline is not None:
+        content = content.replace("\n", newline)
+
     try:
         _replace_file(file_path, content, expected_state)
     except (UnicodeError, OSError, _FileReplacementError) as error:
@@ -148,7 +178,9 @@ _EDIT_FILE_TOOL = _ToolDefinition(
         "edits[].old_text must match a unique, non-overlapping region of the "
         "original file. If two changes affect the same block or nearby lines, "
         "merge them into one edit instead of emitting overlapping edits. Do "
-        "not include large unchanged regions just to connect distant changes."
+        "not include large unchanged regions just to connect distant changes. "
+        "Matching ignores whether the file uses LF, CRLF or CR line endings, "
+        "and the file keeps its own style."
     ),
     arguments_model=_EditFileArguments,
     execute=_execute_edit,
