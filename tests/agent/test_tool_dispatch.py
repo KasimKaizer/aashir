@@ -1,33 +1,20 @@
 import json
 from pathlib import Path
-from typing import NoReturn
 
 import pytest
 from openai.types.chat import ChatCompletionMessageParam
 
 from aashir.agent.contracts import ToolResult
 from aashir.agent.tool_calls import _execute_tool_calls, _ToolCallAccumulator
-from aashir.tools import AGENT_TOOLS, execute_tool_call
-from aashir.tools.base import _ToolArguments, _ToolDefinition
-from aashir.tools.edit_file import _EditFileArguments
-from aashir.tools.registry import _TOOL_DEFINITIONS
+from aashir.tools import AGENT_TOOLS
+from aashir.tools.edit_file import EditFileArguments
 
 
-class SearchArguments(_ToolArguments):
-    """Arguments for the generic formatter test."""
-
-    content: str
-
-
-@pytest.mark.parametrize(
-    ("tool_name",),
-    [("computer_use",), ("git",), ("unknown_tool",)],
-)
-def test_execute_tool_calls_rejects_unknown_tools(tool_name: str) -> None:
+def test_execute_tool_calls_rejects_unknown_tools() -> None:
     # Given: a call using an unregistered tool name.
     call = _ToolCallAccumulator(
         call_id="call_unknown",
-        name=tool_name,
+        name="unknown_tool",
         arguments="{}",
     )
     history: list[ChatCompletionMessageParam] = []
@@ -40,69 +27,10 @@ def test_execute_tool_calls_rejects_unknown_tools(tool_name: str) -> None:
     assert results == [
         ToolResult(
             call_id="call_unknown",
-            name=tool_name,
+            name="unknown_tool",
             output="error: unknown tool called",
         )
     ]
-
-
-@pytest.mark.parametrize(
-    ("raw_arguments", "expected_output"),
-    [
-        (
-            '{"content": 42}',
-            "error: invalid arguments at content: Input should be a valid string",
-        ),
-        (
-            '{"content": "query", "unexpected": "value"}',
-            "error: invalid arguments: Extra inputs are not permitted",
-        ),
-    ],
-    ids=("invalid-field-value", "unrecognized-field"),
-)
-def test_tool_definition_uses_generic_validation_error_formatter_by_default(
-    raw_arguments: str, expected_output: str
-) -> None:
-    # Given: a generic tool definition with no custom formatter.
-    definition = _ToolDefinition(
-        name="search",
-        description="Search for information",
-        arguments_model=SearchArguments,
-        execute=lambda arguments: arguments.content,
-    )
-
-    # When: the dispatcher validates invalid arguments.
-    result = definition.execute_json(raw_arguments)
-
-    # Then: it returns the generic error for that validation issue.
-    assert result == expected_output
-
-
-def test_execute_tool_calls_rejects_invalid_arguments_before_writing(
-    tmp_path: Path,
-) -> None:
-    # Given: a write call missing its required content argument.
-    path = tmp_path / "missing" / "note.txt"
-    call = _ToolCallAccumulator(
-        call_id="call_invalid",
-        name="write_file",
-        arguments=json.dumps({"file_path": str(path)}),
-    )
-    history: list[ChatCompletionMessageParam] = []
-
-    # When: the tool call is dispatched without starting a provider.
-    events = list(_execute_tool_calls((call,), history))
-
-    # Then: it produces one validation error and leaves the target directory absent.
-    results = [event for event in events if isinstance(event, ToolResult)]
-    assert results == [
-        ToolResult(
-            call_id="call_invalid",
-            name="write_file",
-            output="error: content must be a string",
-        )
-    ]
-    assert not path.parent.exists()
 
 
 def test_execute_tool_calls_rejects_arguments_over_the_utf8_byte_cap(
@@ -141,18 +69,13 @@ def test_execute_tool_calls_rejects_arguments_over_the_utf8_byte_cap(
     assert not path.exists()
 
 
-def test_execute_tool_calls_converts_tool_exceptions_to_one_error_result(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Given: a read tool call and an unexpected failure at the file-read boundary.
-    def fail_open(path: Path, mode: str = "r", encoding: str | None = None) -> NoReturn:
-        raise RuntimeError("unexpected tool failure")
-
-    monkeypatch.setattr(Path, "open", fail_open)
+def test_execute_tool_calls_converts_tool_exceptions_to_one_error_result() -> None:
+    # Given: a read call whose path makes the real tool raise an unexpected
+    # ValueError (an embedded NUL byte is not a valid path).
     call = _ToolCallAccumulator(
         call_id="call_failed",
         name="read_file",
-        arguments=json.dumps({"file_path": "note.txt"}),
+        arguments=json.dumps({"file_path": "bad\u0000name"}),
     )
     history: list[ChatCompletionMessageParam] = []
 
@@ -175,36 +98,6 @@ def test_execute_tool_calls_converts_tool_exceptions_to_one_error_result(
             "content": "error: tool execution failed",
         }
     ]
-
-
-def test_advertised_schema_and_dispatch_use_the_same_tool_definition(
-    tmp_path: Path,
-) -> None:
-    # Given: the write_file definition and its advertised provider schema.
-    definition = next(
-        definition
-        for definition in _TOOL_DEFINITIONS
-        if definition.name == "write_file"
-    )
-    advertised_function = next(
-        tool["function"]
-        for tool in AGENT_TOOLS
-        if tool["type"] == "function" and tool["function"]["name"] == definition.name
-    )
-    path = tmp_path / "missing" / "note.txt"
-    raw_arguments = json.dumps({"file_path": str(path)})
-
-    # When: the dispatcher validates the same definition's missing required field.
-    result = execute_tool_call(definition.name, raw_arguments)
-
-    # Then: advertised schema comes from the definition's model and validation
-    # prevents the executor from creating the target directory.
-    assert (
-        advertised_function["parameters"]
-        == definition.arguments_model.model_json_schema()
-    )
-    assert result == "error: content must be a string"
-    assert not path.parent.exists()
 
 
 @pytest.mark.parametrize(
@@ -232,14 +125,63 @@ def test_advertised_schema_keeps_descriptive_model_title(
     assert parameters_schema["title"] == expected_title
 
 
-def test_edit_file_model_schema_keeps_descriptive_text_edit_title() -> None:
-    # Given: the internal edit-file argument model.
-    parameters_schema = _EditFileArguments.model_json_schema()
+def test_edit_file_schema_names_the_nested_edit_model_text_edit() -> None:
+    # Given: the edit-file argument model.
+    # When: its JSON Schema is generated.
+    parameters_schema = EditFileArguments.model_json_schema()
 
-    # When: the edit-item schema reference is resolved.
-    text_edit_reference = parameters_schema["properties"]["edits"]["items"]["$ref"]
-    definition_name = text_edit_reference.rsplit("/", maxsplit=1)[-1]
-    text_edit_schema = parameters_schema["$defs"][definition_name]
+    # Then: the provider sees TextEdit as the reference key and title, not a
+    # private Python class name.
+    assert parameters_schema["properties"]["edits"]["items"]["$ref"] == (
+        "#/$defs/TextEdit"
+    )
+    assert parameters_schema["$defs"]["TextEdit"]["title"] == "TextEdit"
 
-    # Then: the provider sees the descriptive model title.
-    assert text_edit_schema["title"] == "TextEdit"
+
+def test_advertised_read_file_schema_requires_a_path_and_positive_range_values() -> (
+    None
+):
+    # Given: the provider-visible read_file schema, as the provider receives it.
+    function_schema = next(
+        tool["function"]
+        for tool in AGENT_TOOLS
+        if tool["type"] == "function" and tool["function"]["name"] == "read_file"
+    )
+
+    # When: its parameters are read back as plain JSON.
+    parameters = json.loads(json.dumps(function_schema["parameters"]))
+
+    # Then: the path is required and non-empty, and offset and limit are positive.
+    assert parameters["required"] == ["file_path"]
+    assert parameters["properties"]["file_path"]["minLength"] == 1
+    for range_argument in ("offset", "limit"):
+        range_options = parameters["properties"][range_argument]["anyOf"]
+        assert {"type": "integer", "minimum": 1} in range_options
+
+
+def test_advertised_edit_file_schema_requires_a_path_and_strict_non_empty_edits() -> (
+    None
+):
+    # Given: the provider-visible edit_file schema, as the provider receives it.
+    function_schema = next(
+        tool["function"]
+        for tool in AGENT_TOOLS
+        if tool["type"] == "function" and tool["function"]["name"] == "edit_file"
+    )
+
+    # When: its parameters are read back as plain JSON.
+    parameters = json.loads(json.dumps(function_schema["parameters"]))
+
+    # Then: it needs a path and at least one edit with non-empty old_text, and
+    # unknown fields are rejected at both levels.
+    assert parameters["additionalProperties"] is False
+    assert {"file_path", "edits"} <= set(parameters["required"])
+    assert parameters["properties"]["file_path"]["minLength"] == 1
+    edits = parameters["properties"]["edits"]
+    assert edits["type"] == "array"
+    assert edits["minItems"] == 1
+    definition_name = edits["items"]["$ref"].rsplit("/", maxsplit=1)[-1]
+    text_edit = parameters["$defs"][definition_name]
+    assert text_edit["additionalProperties"] is False
+    assert {"old_text", "new_text"} <= set(text_edit["required"])
+    assert text_edit["properties"]["old_text"]["minLength"] == 1

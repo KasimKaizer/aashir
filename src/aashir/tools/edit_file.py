@@ -17,7 +17,9 @@ from aashir.tools.file_replacement import (
 )
 
 
-class _TextEdit(_ToolArguments):
+# Public on purpose: pydantic derives this schema's `$defs`/`$ref` key from the
+# class name, and the provider sees that key.
+class TextEdit(_ToolArguments):
     """One exact text replacement within a file."""
 
     model_config = ConfigDict(title="TextEdit")
@@ -38,7 +40,8 @@ class _TextEdit(_ToolArguments):
     ]
 
 
-class _EditFileArguments(_ToolArguments):
+# Public on purpose: the class name is also the schema title the provider sees.
+class EditFileArguments(_ToolArguments):
     """Arguments for applying exact text replacements to a file."""
 
     model_config = ConfigDict(title="EditFileArguments")
@@ -51,7 +54,7 @@ class _EditFileArguments(_ToolArguments):
         ),
     ]
     edits: Annotated[
-        list[_TextEdit],
+        list[TextEdit],
         Field(
             min_length=1,
             description=(
@@ -101,7 +104,7 @@ def _single_newline_style(content: str) -> str | None:
     return used_styles[0] if len(used_styles) == 1 else None
 
 
-def _execute_edit(arguments: _EditFileArguments) -> str:
+def _execute_edit(arguments: EditFileArguments) -> str:
     """Apply exact, non-overlapping replacements to one UTF-8 file.
 
     Every ``old_text`` must occur exactly once in the original content. An empty
@@ -182,7 +185,7 @@ _EDIT_FILE_TOOL = _ToolDefinition(
         "Matching ignores whether the file uses LF, CRLF or CR line endings, "
         "and the file keeps its own style."
     ),
-    arguments_model=_EditFileArguments,
+    arguments_model=EditFileArguments,
     execute=_execute_edit,
     validation_error_formatter=_edit_validation_error_message,
 )

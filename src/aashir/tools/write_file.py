@@ -17,7 +17,8 @@ from aashir.tools.file_replacement import (
 )
 
 
-class _WriteFileArguments(_ToolArguments):
+# Public on purpose: the class name is also the schema title the provider sees.
+class WriteFileArguments(_ToolArguments):
     """Arguments for writing a UTF-8 text file."""
 
     model_config = ConfigDict(title="WriteFileArguments")
@@ -44,7 +45,7 @@ def _write_validation_error_message(error: ValidationError) -> str:
             return _generic_validation_error_message(error)
 
 
-def _execute_write(arguments: _WriteFileArguments) -> str:
+def _execute_write(arguments: WriteFileArguments) -> str:
     """Create parent directories and replace a UTF-8 file's contents.
 
     Empty content is valid, and newline sequences are preserved. An existing
@@ -75,7 +76,7 @@ _WRITE_FILE_TOOL = _ToolDefinition(
         "Write content to a file. Creates the file if it doesn't exist, "
         "overwrites if it does. Automatically creates parent directories."
     ),
-    arguments_model=_WriteFileArguments,
+    arguments_model=WriteFileArguments,
     execute=_execute_write,
     validation_error_formatter=_write_validation_error_message,
 )

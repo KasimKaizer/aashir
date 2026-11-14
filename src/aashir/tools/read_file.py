@@ -14,7 +14,8 @@ from aashir.tools.base import (
 )
 
 
-class _ReadFileArguments(_ToolArguments):
+# Public on purpose: the class name is also the schema title the provider sees.
+class ReadFileArguments(_ToolArguments):
     """Arguments for reading a UTF-8 text file."""
 
     model_config = ConfigDict(title="ReadFileArguments")
@@ -54,7 +55,7 @@ def _read_validation_error_message(error: ValidationError) -> str:
             return _generic_validation_error_message(error)
 
 
-def _execute_read(arguments: _ReadFileArguments) -> str:
+def _execute_read(arguments: ReadFileArguments) -> str:
     """Read a span of a UTF-8 file as ``N:text`` lines.
 
     Only the lines up to the end of the requested span are read. Line endings
@@ -96,7 +97,7 @@ _READ_FILE_TOOL = _ToolDefinition(
         "where N is its 1-based line number. Use offset and limit to read a "
         "range of lines instead of the whole file."
     ),
-    arguments_model=_ReadFileArguments,
+    arguments_model=ReadFileArguments,
     execute=_execute_read,
     validation_error_formatter=_read_validation_error_message,
 )

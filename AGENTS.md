@@ -83,7 +83,7 @@ Aashir is an AI agent for software-engineering tasks. The idea of this project i
 - Examples and tests that exercise supported public behavior should import from these package facades, not implementation modules. A direct import from an implementation module is not a supported public API.
 - Prefix module-level implementation-only helpers, classes, and constants with `_`. Internal modules and focused unit tests may still import these names directly; that does not make them public.
 - Keep CLI entry points and framework hooks under the names required by their callers; they are entry points, not general package API.
-- For Pydantic models used in provider-visible JSON Schema, keep schema titles descriptive even when Python class names are private. Test generated schemas when renaming these classes because class names can affect titles and `$ref` keys.
+- Pydantic models used in provider-visible JSON Schema keep public (unprefixed) class names, with a one-line comment saying so: pydantic derives `$defs` and `$ref` keys from the class name, and the provider sees them. They stay out of `__all__` unless they are supported API. Test generated schemas when renaming these classes.
 
 ## Tool, Protocol, and Safety Rules
 
