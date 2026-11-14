@@ -54,8 +54,12 @@ def _load_settings() -> _CLISettings:
 
 
 def _parse_reasoning_effort(value: str | None) -> ChatCompletionReasoningEffort:
-    """Validate the configured reasoning effort against SDK-supported values."""
-    if value is None:
+    """Validate the configured reasoning effort against SDK-supported values.
+
+    Returns:
+        The effort, or ``None`` when it is unset or empty so none is requested.
+    """
+    if not value:
         return None
 
     match value:
@@ -86,7 +90,6 @@ def _configure_request(settings: _CLISettings) -> AgentRequest:
         "OPENAI_API_KEY": settings.api_key,
         "OPENAI_BASE_URL": settings.base_url,
         "BASE_MODEL_NAME": settings.model_name,
-        "REASONING_EFFORT": settings.reasoning_effort,
     }
     missing: list[str] = [
         var for var, val in required_vars.items() if val in {"", None}

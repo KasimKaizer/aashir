@@ -15,7 +15,7 @@ uv sync
 cp .env.example .env
 ```
 
-Edit `.env` to set `OPENAI_API_KEY`, `BASE_MODEL_NAME`, and `REASONING_EFFORT` for your provider. Set `OPENAI_BASE_URL` to the provider's API base URL.
+Edit `.env` to set `OPENAI_API_KEY` and `BASE_MODEL_NAME` for your provider. Set `OPENAI_BASE_URL` to the provider's API base URL. `REASONING_EFFORT` is optional; leave it unset or empty to request none.
 
 `SYSTEM_PROMPT_FILE` is the path to a text file containing your system prompt. You can create `prompt.txt` in the project directory, for example.
 
