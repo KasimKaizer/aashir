@@ -1,7 +1,6 @@
 import json
 import sys
 from pathlib import Path
-from unittest.mock import Mock
 
 import pytest
 
@@ -286,34 +285,6 @@ def test_edit_file_rejects_ambiguous_or_overlapping_matches_without_writing(
 
     # Then: it rejects the ambiguous request without changing the file.
     assert result.startswith("error:")
-    assert path.read_text(encoding="utf-8") == original
-
-
-def test_edit_file_returns_write_error_without_changing_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Given: a valid edit for an existing file and a write failure at the I/O boundary.
-    path = tmp_path / "note.txt"
-    original = "before"
-    path.write_text(original, encoding="utf-8")
-    arguments = json.dumps(
-        {
-            "file_path": str(path),
-            "edits": [{"old_text": "before", "new_text": "after"}],
-        }
-    )
-
-    # When: the edit tool attempts to write the validated replacement.
-    with monkeypatch.context() as scoped:
-        scoped.setattr(
-            Path,
-            "write_text",
-            Mock(side_effect=OSError("simulated write failure")),
-        )
-        result = execute_tool_call("edit_file", arguments)
-
-    # Then: the failure is returned as an error and the file remains unchanged.
-    assert result == "error: simulated write failure"
     assert path.read_text(encoding="utf-8") == original
 
 

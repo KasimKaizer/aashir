@@ -10,6 +10,11 @@ from aashir.tools.base import (
     _ToolArguments,
     _ToolDefinition,
 )
+from aashir.tools.file_replacement import (
+    _FileReplacementError,
+    _observe_file,
+    _replace_file,
+)
 
 
 class _TextEdit(_ToolArguments):
@@ -83,8 +88,9 @@ def _execute_edit(arguments: _EditFileArguments) -> str:
     """Apply exact, non-overlapping replacements to one UTF-8 file.
 
     Every ``old_text`` must occur exactly once in the original content. An empty
-    ``new_text`` deletes a match. The file is written only after all edits pass
-    validation, and existing newline sequences are preserved.
+    ``new_text`` deletes a match. The file is replaced only after all edits pass
+    validation, existing newline sequences are preserved, and the original bytes
+    stay in place if the replacement fails or is refused.
 
     Args:
         arguments: Validated file path and edit list.
@@ -94,8 +100,11 @@ def _execute_edit(arguments: _EditFileArguments) -> str:
     """
     try:
         file_path = Path(arguments.file_path)
+        # Observe before reading, so a change between the read and the rename is
+        # detected.
+        expected_state = _observe_file(file_path)
         content = file_path.read_text(encoding="utf-8", newline="")
-    except (UnicodeError, OSError) as error:
+    except (UnicodeError, OSError, _FileReplacementError) as error:
         return f"error: {error}"
 
     spans: list[tuple[int, int, str]] = []
@@ -122,12 +131,14 @@ def _execute_edit(arguments: _EditFileArguments) -> str:
         parts.extend((content[pointer:start], new_text))
         pointer = end
     content = "".join((*parts, content[pointer:]))
-
     try:
-        file_path.write_text(content, encoding="utf-8", newline="")
-        return f"success: edited {len(arguments.edits)} text blocks in {arguments.file_path}"
-    except (UnicodeError, OSError) as error:
+        _replace_file(file_path, content, expected_state)
+    except (UnicodeError, OSError, _FileReplacementError) as error:
         return f"error: {error}"
+
+    return (
+        f"success: edited {len(arguments.edits)} text blocks in {arguments.file_path}"
+    )
 
 
 _EDIT_FILE_TOOL = _ToolDefinition(
