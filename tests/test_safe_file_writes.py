@@ -354,12 +354,17 @@ def test_hard_linked_file_is_refused_and_both_names_are_unchanged(
     assert other_name.read_bytes() == _ORIGINAL_TEXT.encode()
 
 
+def _make_fifo(path: Path) -> None:
+    # Looked up at call time because ``os.mkfifo`` does not exist on Windows.
+    os.mkfifo(path)
+
+
 @pytest.mark.parametrize(("tool_name",), _TOOL_NAMES)
 @pytest.mark.parametrize(
     ("make_special_file",),
     [
         pytest.param(Path.mkdir, id="directory"),
-        pytest.param(os.mkfifo, marks=_POSIX_ONLY, id="fifo"),
+        pytest.param(_make_fifo, marks=_POSIX_ONLY, id="fifo"),
     ],
 )
 def test_special_file_is_refused_without_opening_it(
