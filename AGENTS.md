@@ -57,7 +57,11 @@ Aashir is an AI agent for software-engineering tasks. The idea of this project i
   - Use `frozen=True` when field reassignment should be disallowed, remembering that it does not make nested lists or dictionaries immutable. Use `slots=True` when preventing arbitrary per-instance attributes or reducing instance memory is useful.
   - Keep raised/caught errors as `Exception` subclasses, not Pydantic data models. Treat changes to exported data types as intentional API changes.
 - Prefer immutable value and configuration objects; make mutability explicit when it is part of the object's purpose.
-- Keep code comments to a minimum; use them to explain non-obvious or particularly challenging logic.
+- Keep code comments to a minimum. Make the code explain itself through names and structure. Comment only a non-obvious reason or caveat the code cannot express, such as a platform limit, and put a caveat that spans several lines in one docstring or comment where it applies instead of scattering it.
+- Write comments and docstrings for human engineers: precise technical terms (`fsync`, `st_uid`, ACLs) in plain sentences. Do not oversimplify, and do not write like a prompt. State what happens and the consequence (for example, "After a crash, the replacement may be lost").
+- Docstrings: a one-line noun-phrase module docstring (`"""The ``read_file`` tool."""`); one-line class docstrings; a one-line summary on simple helpers. Use Google-style `Args`/`Returns`/`Yields`/`Raises` sections on non-trivial functions, in the imperative mood ("Convert...", "Process...").
+- Define custom errors as `@dataclass(frozen=True, slots=True)` `Exception` subclasses with typed fields and an `@override __str__` (see `ProviderError`), not bare-string `__init__` exceptions.
+- Mark module-level constants `Final`.
 - Do not catch exceptions merely to suppress them. Not every exception has to be caught; let unexpected failures propagate. Catch narrowly only when the code has a defined recovery, needs to provide useful error context, or must return a defined tool/protocol error. Do not add broad catches that hide provider or runtime failures.
 - When adding context while re-raising an exception, preserve its cause so the original failure remains available.
 - Prefer direct expressions when they are clearer. Use named intermediate values when they improve understanding, reuse, or diagnosis.
