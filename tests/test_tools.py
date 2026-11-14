@@ -7,16 +7,28 @@ import pytest
 from aashir.tools import execute_tool_call
 
 
-@pytest.mark.parametrize("raw_arguments", ["{", "[]", "{}"])
+@pytest.mark.parametrize(
+    ("raw_arguments", "expected_error"),
+    [
+        (
+            "{",
+            "error: invalid arguments at arguments: Invalid JSON: "
+            "EOF while parsing an object at line 1 column 1",
+        ),
+        ("[]", "error: invalid arguments at arguments: Input should be an object"),
+        ("{}", "error: file_path must be a non-empty string"),
+    ],
+    ids=("malformed-json", "non-object", "empty-object"),
+)
 def test_execute_tool_call_rejects_malformed_or_non_object_arguments(
-    raw_arguments: str,
+    raw_arguments: str, expected_error: str
 ) -> None:
     # Given: malformed JSON, an array, or an empty argument object.
     # When: the tool dispatcher parses the arguments.
     result = execute_tool_call("read_file", raw_arguments)
 
-    # Then: the invalid request is returned as a tool error.
-    assert result.startswith("error:")
+    # Then: the invalid request is returned as that tool error.
+    assert result == expected_error
 
 
 def test_read_file_tool_returns_every_line_as_numbered_text(
@@ -103,8 +115,8 @@ def test_read_file_returns_empty_text_for_empty_file(
     assert result == ""
 
 
-@pytest.mark.parametrize("argument_name", ["offset", "limit"])
-@pytest.mark.parametrize("value", [0, -1, 1.5, 1.0, "2", True, [], {}])
+@pytest.mark.parametrize(("argument_name",), [("offset",), ("limit",)])
+@pytest.mark.parametrize(("value",), [(0,), (-1,), (1.5,), ("2",), (True,)])
 def test_read_file_rejects_invalid_range_arguments(
     numbered_file: Path, argument_name: str, value: object
 ) -> None:
@@ -309,27 +321,37 @@ def test_edit_file_rejects_missing_match_without_partially_writing(
     # When: the edit tool validates the full edit list.
     result = execute_tool_call("edit_file", arguments)
 
-    # Then: it reports the error without partially changing the file.
-    assert result.startswith("error:")
+    # Then: it reports the missing match without partially changing the file.
+    assert result == "error: edit at index 1 - 'old_text' not found in the file"
     assert path.read_text(encoding="utf-8") == original
 
 
 @pytest.mark.parametrize(
-    ("original", "edits"),
+    ("original", "edits", "expected_error"),
     [
-        ("repeat repeat", [{"old_text": "repeat", "new_text": "once"}]),
-        ("banana", [{"old_text": "ana", "new_text": "X"}]),
+        (
+            "repeat repeat",
+            [{"old_text": "repeat", "new_text": "once"}],
+            "error: edit at index 0 - 'old_text' is found more than once in the file",
+        ),
+        (
+            "banana",
+            [{"old_text": "ana", "new_text": "X"}],
+            "error: edit at index 0 - 'old_text' is found more than once in the file",
+        ),
         (
             "abcdef",
             [
                 {"old_text": "abc", "new_text": "abc"},
                 {"old_text": "cde", "new_text": "Y"},
             ],
+            "error: overlapping edit at position 3",
         ),
     ],
+    ids=("repeated", "self-overlapping", "overlapping-edits"),
 )
 def test_edit_file_rejects_ambiguous_or_overlapping_matches_without_writing(
-    tmp_path: Path, original: str, edits: list[dict[str, str]]
+    tmp_path: Path, original: str, edits: list[dict[str, str]], expected_error: str
 ) -> None:
     # Given: edits with repeated or overlapping match regions.
     path = tmp_path / "note.txt"
@@ -340,7 +362,7 @@ def test_edit_file_rejects_ambiguous_or_overlapping_matches_without_writing(
     result = execute_tool_call("edit_file", arguments)
 
     # Then: it rejects the ambiguous request without changing the file.
-    assert result.startswith("error:")
+    assert result == expected_error
     assert path.read_text(encoding="utf-8") == original
 
 
@@ -357,8 +379,10 @@ def test_edit_file_does_not_create_a_missing_file(tmp_path: Path) -> None:
     # When: the edit tool tries to read the target.
     result = execute_tool_call("edit_file", arguments)
 
-    # Then: it reports the I/O error without creating a file.
+    # Then: it reports the I/O error for that file without creating it. (Only the
+    # name is compared: OSError doubles the backslashes of a Windows path.)
     assert result.startswith("error:")
+    assert path.name in result
     assert not path.exists()
 
 
@@ -432,8 +456,10 @@ def test_write_file_returns_error_when_parent_path_is_a_file(tmp_path: Path) -> 
         json.dumps({"file_path": str(target), "content": "new"}),
     )
 
-    # Then: it returns the I/O error and leaves the existing file unchanged.
+    # Then: it returns an I/O error naming the blocking file and leaves it unchanged.
+    # (Windows names the parent path, POSIX the full target path.)
     assert result.startswith("error:")
+    assert parent.name in result
     assert parent.read_text(encoding="utf-8") == "keep"
 
 

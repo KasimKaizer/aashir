@@ -16,9 +16,18 @@ _ORIGINAL_TEXT: Final = "original text"
 _REPLACED_BYTES: Final = b"replaced text"
 # Group-writable, so a typical umask would strip a bit from a newly created file.
 _ORIGINAL_MODE: Final = 0o664
+# Pinned so a same-size change is detectable even on coarse file timestamps.
+_OLD_TIMESTAMP_NS: Final = 1_000_000_000_000_000_000
 
 _POSIX_ONLY: Final = pytest.mark.skipif(
     sys.platform == "win32", reason="needs POSIX links, FIFOs or directory flushing"
+)
+_WINDOWS_ONLY: Final = pytest.mark.skipif(
+    sys.platform != "win32", reason="needs Windows file-sharing rules"
+)
+_NOT_ROOT: Final = pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root ignores read-only permissions",
 )
 
 type _FaultInstaller = Callable[[pytest.MonkeyPatch], None]
@@ -94,11 +103,27 @@ def _fail_directory_flush(scoped: pytest.MonkeyPatch, error: BaseException) -> N
     scoped.setattr(os, "fsync", fsync)
 
 
-def _change_target_before_rename(scoped: pytest.MonkeyPatch, path: Path) -> None:
+def _change_target_before_rename(
+    scoped: pytest.MonkeyPatch, path: Path, concurrent_text: str
+) -> None:
     real_fsync = os.fsync
 
     def fsync(descriptor: int) -> None:
-        path.write_text("concurrent edit by someone else", encoding="utf-8")
+        path.write_text(concurrent_text, encoding="utf-8")
+        real_fsync(descriptor)
+
+    scoped.setattr(os, "fsync", fsync)
+
+
+def _record_temporary_file_size_at_fsync(
+    scoped: pytest.MonkeyPatch, sizes: list[int]
+) -> None:
+    real_fsync = os.fsync
+
+    def fsync(descriptor: int) -> None:
+        status = os.fstat(descriptor)
+        if stat.S_ISREG(status.st_mode):
+            sizes.append(status.st_size)
         real_fsync(descriptor)
 
     scoped.setattr(os, "fsync", fsync)
@@ -130,16 +155,21 @@ def original_file(tmp_path: Path) -> Path:
 
 _TOOL_NAMES: Final = [("write_file",), ("edit_file",)]
 _PRE_REPLACEMENT_FAULTS: Final = [
-    pytest.param(_fail_temporary_write, id="temporary-write"),
-    pytest.param(_fail_temporary_flush, id="temporary-flush"),
-    pytest.param(_fail_rename, id="rename"),
+    pytest.param(
+        _fail_temporary_write, "No space left on device", id="temporary-write"
+    ),
+    pytest.param(_fail_temporary_flush, "Input/output error", id="temporary-flush"),
+    pytest.param(_fail_rename, "Invalid cross-device link", id="rename"),
 ]
 
 
-@pytest.mark.parametrize(("install_fault",), _PRE_REPLACEMENT_FAULTS)
+@pytest.mark.parametrize(("install_fault", "expected_error"), _PRE_REPLACEMENT_FAULTS)
 @pytest.mark.parametrize(("tool_name",), _TOOL_NAMES)
 def test_failure_before_replacement_keeps_original_bytes_and_mode(
-    original_file: Path, tool_name: str, install_fault: _FaultInstaller
+    original_file: Path,
+    tool_name: str,
+    install_fault: _FaultInstaller,
+    expected_error: str,
 ) -> None:
     # Given: an existing file with a non-default mode and a failing I/O step.
     mode_before = original_file.stat().st_mode
@@ -152,14 +182,15 @@ def test_failure_before_replacement_keeps_original_bytes_and_mode(
 
     # Then: the failure is reported, the original is intact, and no temp file stays.
     assert result.startswith("error:")
+    assert expected_error in result
     assert original_file.read_bytes() == _ORIGINAL_TEXT.encode()
     assert original_file.stat().st_mode == mode_before
     assert _directory_entries(original_file.parent) == ["note.txt"]
 
 
-@pytest.mark.parametrize(("install_fault",), _PRE_REPLACEMENT_FAULTS)
+@pytest.mark.parametrize(("install_fault", "expected_error"), _PRE_REPLACEMENT_FAULTS)
 def test_failed_write_of_a_new_file_leaves_no_destination_or_temp_file(
-    tmp_path: Path, install_fault: _FaultInstaller
+    tmp_path: Path, install_fault: _FaultInstaller, expected_error: str
 ) -> None:
     # Given: a path that does not exist yet and a failing I/O step.
     path = tmp_path / "new.txt"
@@ -170,8 +201,9 @@ def test_failed_write_of_a_new_file_leaves_no_destination_or_temp_file(
         install_fault(scoped)
         result = execute_tool_call("write_file", request)
 
-    # Then: nothing is left behind.
+    # Then: the failure is reported and nothing is left behind.
     assert result.startswith("error:")
+    assert expected_error in result
     assert _directory_entries(tmp_path) == []
 
 
@@ -236,32 +268,65 @@ def test_directory_flush_failure_reports_replacement_without_rolling_back(
 
 
 @pytest.mark.parametrize(
-    ("tool_name", "original_text"),
+    ("tool_name", "original_text", "concurrent_text"),
     [
-        pytest.param("write_file", _ORIGINAL_TEXT, id="write-existing"),
-        pytest.param("edit_file", _ORIGINAL_TEXT, id="edit-existing"),
-        pytest.param("write_file", None, id="write-new"),
+        pytest.param(
+            "write_file",
+            _ORIGINAL_TEXT,
+            "concurrent edit by someone else",
+            id="write-existing",
+        ),
+        pytest.param(
+            "edit_file",
+            _ORIGINAL_TEXT,
+            "concurrent edit by someone else",
+            id="edit-existing",
+        ),
+        pytest.param(
+            "write_file", None, "concurrent edit by someone else", id="write-new"
+        ),
+        pytest.param(
+            "write_file", _ORIGINAL_TEXT, "other content", id="write-same-size"
+        ),
     ],
 )
 def test_changed_target_is_refused_without_overwriting_the_other_change(
-    tmp_path: Path, tool_name: str, original_text: str | None
+    tmp_path: Path, tool_name: str, original_text: str | None, concurrent_text: str
 ) -> None:
     # Given: a target that another writer changes while the replacement is prepared.
     path = tmp_path / "note.txt"
     if original_text is not None:
         path.write_text(original_text, encoding="utf-8")
+        os.utime(path, ns=(_OLD_TIMESTAMP_NS, _OLD_TIMESTAMP_NS))
     request = _change_request(tool_name, path)
 
     # When: the tool tries to replace it.
     with pytest.MonkeyPatch.context() as scoped:
-        _change_target_before_rename(scoped, path)
+        _change_target_before_rename(scoped, path, concurrent_text)
         result = execute_tool_call(tool_name, request)
 
     # Then: the other writer's content survives and no temp file stays.
     assert result.startswith("error:")
     assert "changed while the replacement was being prepared" in result
-    assert path.read_text(encoding="utf-8") == "concurrent edit by someone else"
+    assert path.read_text(encoding="utf-8") == concurrent_text
     assert _directory_entries(tmp_path) == ["note.txt"]
+
+
+@pytest.mark.parametrize(("tool_name",), _TOOL_NAMES)
+def test_temporary_file_holds_the_full_content_when_it_is_fsynced(
+    original_file: Path, tool_name: str
+) -> None:
+    # Given: a hook that records the temporary file's on-disk size at each fsync.
+    sizes: list[int] = []
+    request = _change_request(tool_name, original_file)
+
+    # When: the tool replaces the file.
+    with pytest.MonkeyPatch.context() as scoped:
+        _record_temporary_file_size_at_fsync(scoped, sizes)
+        execute_tool_call(tool_name, request)
+
+    # Then: the data was already written out, so the fsync made all of it durable.
+    assert sizes == [len(_REPLACED_BYTES)]
 
 
 @pytest.mark.parametrize(("tool_name",), _TOOL_NAMES)
@@ -293,7 +358,7 @@ def test_new_file_gets_the_normal_creation_mode(tmp_path: Path) -> None:
         json.dumps({"file_path": str(tmp_path / "new.txt"), "content": "text"}),
     )
 
-    # Then: it has that same mode, not the private mode of its temporary file.
+    # Then: it has that same mode.
     assert (tmp_path / "new.txt").stat().st_mode == reference.stat().st_mode
 
 
@@ -384,6 +449,7 @@ def test_special_file_is_refused_without_opening_it(
     assert _directory_entries(tmp_path) == ["special"]
 
 
+@_NOT_ROOT
 @pytest.mark.parametrize(("tool_name",), _TOOL_NAMES)
 def test_read_only_file_is_refused_and_unchanged(
     original_file: Path, tool_name: str
@@ -397,3 +463,21 @@ def test_read_only_file_is_refused_and_unchanged(
     # Then: it refuses instead of replacing a file the owner protected.
     assert "not writable" in result
     assert original_file.read_bytes() == _ORIGINAL_TEXT.encode()
+
+
+@_WINDOWS_ONLY
+@pytest.mark.parametrize(("tool_name",), _TOOL_NAMES)
+def test_target_held_open_by_another_process_keeps_original_and_removes_temp_file(
+    original_file: Path, tool_name: str
+) -> None:
+    # Given: the target is open elsewhere, so Windows will not let it be renamed over.
+    request = _change_request(tool_name, original_file)
+
+    # When: the tool tries to replace it.
+    with original_file.open("rb"):
+        result = execute_tool_call(tool_name, request)
+
+    # Then: the rename failure is reported, and nothing is left changed or behind.
+    assert result.startswith("error:")
+    assert original_file.read_bytes() == _ORIGINAL_TEXT.encode()
+    assert _directory_entries(original_file.parent) == ["note.txt"]
