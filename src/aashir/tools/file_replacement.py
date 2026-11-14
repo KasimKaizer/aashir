@@ -1,5 +1,6 @@
 """Replacement of host files that keeps the original when a write fails."""
 
+import hashlib
 import os
 import secrets
 import stat
@@ -45,7 +46,7 @@ class _ReplacedWithoutFlushError(_FileReplacementError):
 
 @dataclass(frozen=True, slots=True)
 class _FileState:
-    """Identity and metadata used to detect a concurrent change to a file."""
+    """Identity, metadata and content used to detect a concurrent change."""
 
     device: int
     inode: int
@@ -54,13 +55,16 @@ class _FileState:
     mode: int
     owner: int
     group: int
+    # Size and timestamps can be restored after an edit; the bytes cannot.
+    content_sha256: str
 
 
 def _observe_file(path: Path) -> _FileState | None:
     """Describe an existing file that can be replaced.
 
     A symbolic link, special file, multiply linked file or read-only file is
-    refused rather than replaced with a file of a different meaning.
+    refused rather than replaced with a file of a different meaning. The whole
+    file is read to hash its content.
 
     Args:
         path: File to inspect. Only its final component is checked.
@@ -70,7 +74,7 @@ def _observe_file(path: Path) -> _FileState | None:
 
     Raises:
         _ReplacementRefusedError: If the path is not a file that can be replaced.
-        OSError: If the file cannot be inspected.
+        OSError: If the file cannot be inspected or read.
     """
     try:
         status = path.lstat()
@@ -94,6 +98,7 @@ def _observe_file(path: Path) -> _FileState | None:
         mode=status.st_mode,
         owner=status.st_uid,
         group=status.st_gid,
+        content_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
     )
 
 
@@ -106,8 +111,9 @@ def _replace_file(path: Path, content: str, expected: _FileState | None) -> None
     An existing file keeps its permission bits; a new file gets the default
     mode. ACLs and extended attributes are not preserved.
 
-    The target is re-checked just before the rename, but another process can
-    still modify it between that check and the rename, and that change is lost.
+    The target is re-checked just before the rename: its identity, metadata
+    and content hash must match ``expected``. Another process can still modify
+    it between that check and the rename, and that change is lost.
 
     Windows behaves differently in these ways:
     - Only the read-only attribute is preserved and checked. There are no Unix

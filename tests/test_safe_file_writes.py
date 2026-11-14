@@ -14,6 +14,8 @@ from aashir.tools import execute_tool_call
 
 _ORIGINAL_TEXT: Final = "original text"
 _REPLACED_BYTES: Final = b"replaced text"
+# Same length as _ORIGINAL_TEXT, so size alone cannot reveal the change.
+_SAME_SIZE_TEXT: Final = "other content"
 # Group-writable, so a typical umask would strip a bit from a newly created file.
 _ORIGINAL_MODE: Final = 0o664
 # Pinned so a same-size change is detectable even on coarse file timestamps.
@@ -104,12 +106,18 @@ def _fail_directory_flush(scoped: pytest.MonkeyPatch, error: BaseException) -> N
 
 
 def _change_target_before_rename(
-    scoped: pytest.MonkeyPatch, path: Path, concurrent_text: str
+    scoped: pytest.MonkeyPatch,
+    path: Path,
+    concurrent_text: str,
+    restored_modified_ns: int | None = None,
 ) -> None:
+    """Rewrite the target in place, optionally restoring its modification time."""
     real_fsync = os.fsync
 
     def fsync(descriptor: int) -> None:
         path.write_text(concurrent_text, encoding="utf-8")
+        if restored_modified_ns is not None:
+            os.utime(path, ns=(restored_modified_ns, restored_modified_ns))
         real_fsync(descriptor)
 
     scoped.setattr(os, "fsync", fsync)
@@ -285,9 +293,6 @@ def test_directory_flush_failure_reports_replacement_without_rolling_back(
         pytest.param(
             "write_file", None, "concurrent edit by someone else", id="write-new"
         ),
-        pytest.param(
-            "write_file", _ORIGINAL_TEXT, "other content", id="write-same-size"
-        ),
     ],
 )
 def test_changed_target_is_refused_without_overwriting_the_other_change(
@@ -309,6 +314,32 @@ def test_changed_target_is_refused_without_overwriting_the_other_change(
     assert result.startswith("error:")
     assert "changed while the replacement was being prepared" in result
     assert path.read_text(encoding="utf-8") == concurrent_text
+    assert _directory_entries(tmp_path) == ["note.txt"]
+
+
+@pytest.mark.parametrize(("tool_name",), _TOOL_NAMES)
+def test_same_size_edit_with_restored_timestamp_is_refused_without_overwriting_it(
+    tmp_path: Path, tool_name: str
+) -> None:
+    # Given: a file that another writer edits in place to different bytes of the
+    # same length, then restores the original modification time.
+    path = tmp_path / "note.txt"
+    path.write_text(_ORIGINAL_TEXT, encoding="utf-8")
+    os.utime(path, ns=(_OLD_TIMESTAMP_NS, _OLD_TIMESTAMP_NS))
+    request = _change_request(tool_name, path)
+
+    # When: the tool tries to replace it.
+    with pytest.MonkeyPatch.context() as scoped:
+        _change_target_before_rename(
+            scoped, path, _SAME_SIZE_TEXT, restored_modified_ns=_OLD_TIMESTAMP_NS
+        )
+        result = execute_tool_call(tool_name, request)
+
+    # Then: the metadata looks unchanged, but the other writer's bytes survive.
+    assert result.startswith("error:")
+    assert "changed while the replacement was being prepared" in result
+    assert path.read_text(encoding="utf-8") == _SAME_SIZE_TEXT
+    assert path.stat().st_mtime_ns == _OLD_TIMESTAMP_NS
     assert _directory_entries(tmp_path) == ["note.txt"]
 
 
@@ -463,6 +494,27 @@ def test_read_only_file_is_refused_and_unchanged(
     # Then: it refuses instead of replacing a file the owner protected.
     assert "not writable" in result
     assert original_file.read_bytes() == _ORIGINAL_TEXT.encode()
+
+
+@_POSIX_ONLY
+@pytest.mark.parametrize(("tool_name",), _TOOL_NAMES)
+def test_file_whose_group_would_change_is_refused_and_unchanged(
+    original_file: Path, tool_name: str
+) -> None:
+    # Given: a file owned by a group that a new file in its directory would not get.
+    new_file_groups = {os.getegid(), original_file.parent.stat().st_gid}
+    other_groups = [group for group in os.getgroups() if group not in new_file_groups]
+    if not other_groups:
+        pytest.skip("needs membership in a group other than the default one")
+    os.chown(original_file, -1, other_groups[0])
+
+    # When: the tool is asked to change it.
+    result = execute_tool_call(tool_name, _change_request(tool_name, original_file))
+
+    # Then: it refuses instead of handing the file to a different group.
+    assert "its owner or group would change" in result
+    assert original_file.read_bytes() == _ORIGINAL_TEXT.encode()
+    assert _directory_entries(original_file.parent) == ["note.txt"]
 
 
 @_WINDOWS_ONLY
