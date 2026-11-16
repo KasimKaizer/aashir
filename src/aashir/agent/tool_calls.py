@@ -21,6 +21,7 @@ class _ToolCallAccumulator:
 def _execute_tool_calls(
     tool_calls: tuple[_ToolCallAccumulator, ...],
     history: list[ChatCompletionMessageParam],
+    argument_byte_cap: int,
 ) -> Iterator[AgentEvent]:
     """Process tool calls in order and append each result to conversation history.
 
@@ -30,6 +31,7 @@ def _execute_tool_calls(
     Args:
         tool_calls: Calls assembled from the provider's streamed response.
         history: Conversation history to append tool results to.
+        argument_byte_cap: Largest accepted tool argument size in UTF-8 bytes.
 
     Yields:
         A start event and result event for each tool call, including malformed calls.
@@ -48,7 +50,11 @@ def _execute_tool_calls(
         elif tool_call.call_id in seen_call_ids:
             content = "error: duplicate tool call id in response"
         else:
-            content = execute_tool_call(tool_call.name, tool_call.arguments)
+            content = execute_tool_call(
+                tool_call.name,
+                tool_call.arguments,
+                argument_byte_cap,
+            )
         yield ToolResult(
             call_id=tool_call.call_id,
             name=tool_call.name,

@@ -16,7 +16,8 @@ def run_agent(client: OpenAI, request: AgentRequest) -> Iterator[AgentEvent]:
 
     Args:
         client: OpenAI client used to request each model round.
-        request: Model, starting messages, and optional tools and reasoning effort.
+        request: Model, starting messages, and optional tools, reasoning effort,
+            and tool argument size limit.
 
     Yields:
         AgentEvent: Answer and reasoning events, tool-call lifecycle events, and
@@ -96,4 +97,8 @@ def run_agent(client: OpenAI, request: AgentRequest) -> Iterator[AgentEvent]:
         )
         # TODO: Consider whether to check calls against request.tools before dispatch;
         # the current loop executes any tool call returned by the provider.
-        yield from _execute_tool_calls(completion.tool_calls, history)
+        yield from _execute_tool_calls(
+            completion.tool_calls,
+            history,
+            request.tool_argument_byte_cap,
+        )

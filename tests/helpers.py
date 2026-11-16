@@ -91,7 +91,7 @@ def make_agent_request(
     return AgentRequest(
         model="test-model",
         messages=[{"role": "user", "content": "hi"}],
-        tools=AGENT_TOOLS if with_tools else None,
+        tools=AGENT_TOOLS if with_tools else [],
         reasoning_effort=reasoning_effort,
     )
 

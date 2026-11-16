@@ -106,8 +106,9 @@ def _stream_completion(
         messages=history,
         stream=True,
         reasoning_effort=(
-            request.reasoning_effort if request.reasoning_effort else omit
+            request.reasoning_effort if request.reasoning_effort is not None else omit
         ),
+        # The API rejects an empty tools list, so an empty list is left out.
         tools=request.tools if request.tools else omit,
     ) as stream:
         for event in stream:

@@ -10,7 +10,7 @@ from aashir.tools.edit_file import _EDIT_FILE_TOOL
 from aashir.tools.read_file import _READ_FILE_TOOL
 from aashir.tools.write_file import _WRITE_FILE_TOOL
 
-_TOOL_ARGUMENT_BYTE_CAP: Final = 1_048_576
+DEFAULT_TOOL_ARGUMENT_BYTE_CAP: Final = 1_048_576
 
 _TOOL_DEFINITIONS: Final = (_READ_FILE_TOOL, _WRITE_FILE_TOOL, _EDIT_FILE_TOOL)
 
@@ -22,12 +22,17 @@ _TOOL_DEFINITIONS_BY_NAME: Final = {
 }
 
 
-def execute_tool_call(tool_name: str, raw_arguments: str) -> str:
+def execute_tool_call(
+    tool_name: str,
+    raw_arguments: str,
+    argument_byte_cap: int = DEFAULT_TOOL_ARGUMENT_BYTE_CAP,
+) -> str:
     """Resolve, bound, validate, and execute one built-in tool call.
 
     Args:
         tool_name: Name of the requested tool.
         raw_arguments: JSON-encoded tool arguments from the model.
+        argument_byte_cap: Largest accepted size of ``raw_arguments`` in UTF-8 bytes.
 
     Returns:
         Tool output or error text suitable for the model.
@@ -37,7 +42,7 @@ def execute_tool_call(tool_name: str, raw_arguments: str) -> str:
         return "error: unknown tool called"
 
     argument_byte_count = len(raw_arguments.encode("utf-8", errors="surrogatepass"))
-    if argument_byte_count > _TOOL_ARGUMENT_BYTE_CAP:
-        return f"error: tool arguments exceed the {_TOOL_ARGUMENT_BYTE_CAP}-byte limit"
+    if argument_byte_count > argument_byte_cap:
+        return f"error: tool arguments exceed the {argument_byte_cap}-byte limit"
 
     return definition.execute_json(raw_arguments)

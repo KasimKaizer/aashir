@@ -1,6 +1,6 @@
 """Public request and event types for agent runs."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from openai.types.chat import (
     ChatCompletionMessageParam,
@@ -8,15 +8,32 @@ from openai.types.chat import (
     ChatCompletionToolUnionParam,
 )
 
+from aashir.tools import DEFAULT_TOOL_ARGUMENT_BYTE_CAP
+
 
 @dataclass(frozen=True, slots=True)
 class AgentRequest:
-    """Model input and starting conversation history for one agent run."""
+    """Model input, starting conversation history, and limits for one agent run.
+
+    An empty ``tools`` list advertises no tools to the model.
+
+    Raises:
+        ValueError: If ``tool_argument_byte_cap`` is not positive, since every
+            tool call would then be rejected.
+    """
 
     model: str
     messages: list[ChatCompletionMessageParam]
-    tools: list[ChatCompletionToolUnionParam] | None = None
+    tools: list[ChatCompletionToolUnionParam] = field(default_factory=list)
     reasoning_effort: ChatCompletionReasoningEffort = None
+    tool_argument_byte_cap: int = DEFAULT_TOOL_ARGUMENT_BYTE_CAP
+
+    def __post_init__(self) -> None:
+        if self.tool_argument_byte_cap <= 0:
+            raise ValueError(
+                "tool_argument_byte_cap must be positive, "
+                f"got {self.tool_argument_byte_cap}"
+            )
 
 
 @dataclass(frozen=True, slots=True)

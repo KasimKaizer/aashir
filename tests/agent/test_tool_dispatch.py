@@ -1,14 +1,22 @@
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from openai.types.chat import ChatCompletionMessageParam
 
-from aashir.agent.contracts import ToolResult
+from aashir.agent import AgentRequest, ToolResult, run_agent
 from aashir.agent.tool_calls import _execute_tool_calls, _ToolCallAccumulator
-from aashir.tools import AGENT_TOOLS
+from aashir.tools import AGENT_TOOLS, DEFAULT_TOOL_ARGUMENT_BYTE_CAP
 from aashir.tools.edit_file import EditFileArguments
+from tests.helpers import (
+    make_agent_request,
+    make_round_trip_client,
+    sse_body,
+    sse_chunk,
+    tool_call,
+)
 
 
 def test_execute_tool_calls_rejects_unknown_tools() -> None:
@@ -21,7 +29,7 @@ def test_execute_tool_calls_rejects_unknown_tools() -> None:
     history: list[ChatCompletionMessageParam] = []
 
     # When: the tool call is dispatched without starting a provider.
-    events = list(_execute_tool_calls((call,), history))
+    events = list(_execute_tool_calls((call,), history, DEFAULT_TOOL_ARGUMENT_BYTE_CAP))
 
     # Then: it produces one unknown-tool result for the original call id.
     results = [event for event in events if isinstance(event, ToolResult)]
@@ -38,16 +46,15 @@ def test_execute_tool_calls_rejects_arguments_over_the_utf8_byte_cap(
     tmp_path: Path,
 ) -> None:
     # Given: a JSON write call whose character count is under the limit but UTF-8
-    # byte count exceeds the frozen 1 MiB cap.
+    # byte count exceeds the default 1 MiB cap.
     path = tmp_path / "oversized.txt"
-    tool_argument_byte_cap = 1_048_576
-    content = "é" * (tool_argument_byte_cap // 2 + 1)
+    content = "é" * (DEFAULT_TOOL_ARGUMENT_BYTE_CAP // 2 + 1)
     raw_arguments = json.dumps(
         {"file_path": str(path), "content": content},
         ensure_ascii=False,
     )
-    assert len(raw_arguments) < tool_argument_byte_cap
-    assert len(raw_arguments.encode("utf-8")) > tool_argument_byte_cap
+    assert len(raw_arguments) < DEFAULT_TOOL_ARGUMENT_BYTE_CAP
+    assert len(raw_arguments.encode("utf-8")) > DEFAULT_TOOL_ARGUMENT_BYTE_CAP
     call = _ToolCallAccumulator(
         call_id="call_oversized",
         name="write_file",
@@ -55,8 +62,8 @@ def test_execute_tool_calls_rejects_arguments_over_the_utf8_byte_cap(
     )
     history: list[ChatCompletionMessageParam] = []
 
-    # When: the tool call is dispatched without starting a provider.
-    events = list(_execute_tool_calls((call,), history))
+    # When: the tool call is dispatched with the default cap.
+    events = list(_execute_tool_calls((call,), history, DEFAULT_TOOL_ARGUMENT_BYTE_CAP))
 
     # Then: it returns one error result and does not write the file.
     results = [event for event in events if isinstance(event, ToolResult)]
@@ -65,8 +72,59 @@ def test_execute_tool_calls_rejects_arguments_over_the_utf8_byte_cap(
     assert results[0].name == "write_file"
     assert (
         results[0].output
-        == f"error: tool arguments exceed the {tool_argument_byte_cap}-byte limit"
+        == f"error: tool arguments exceed the {DEFAULT_TOOL_ARGUMENT_BYTE_CAP}-byte limit"
     )
+    assert not path.exists()
+
+
+def test_agent_request_defaults_the_tool_argument_byte_cap_to_one_mebibyte() -> None:
+    # Given: a request that does not choose a tool argument cap.
+    # When: the request is built.
+    request = AgentRequest(model="test-model", messages=[])
+
+    # Then: it carries the documented default.
+    assert request.tool_argument_byte_cap == 1_048_576
+
+
+@pytest.mark.parametrize(("cap",), [(0,), (-1,)])
+def test_agent_request_rejects_a_non_positive_tool_argument_byte_cap(cap: int) -> None:
+    # Given: a cap that would reject every tool call.
+    # When: the request is built.
+    with pytest.raises(ValueError) as error:
+        AgentRequest(model="test-model", messages=[], tool_argument_byte_cap=cap)
+
+    # Then: the request is refused instead of silently disabling every tool.
+    assert str(error.value) == f"tool_argument_byte_cap must be positive, got {cap}"
+
+
+def test_run_agent_enforces_the_requests_tool_argument_byte_cap(
+    tmp_path: Path,
+) -> None:
+    # Given: a provider turn with a valid write call and a request with a 1-byte cap.
+    path = tmp_path / "too-large.txt"
+    arguments = json.dumps({"file_path": str(path), "content": "text"})
+    first_turn = sse_body(
+        sse_chunk(
+            {"tool_calls": [tool_call(0, "call_custom_cap", "write_file", arguments)]},
+            finish_reason="tool_calls",
+        )
+    )
+    client, _ = make_round_trip_client(first_turn)
+    request = replace(make_agent_request(with_tools=True), tool_argument_byte_cap=1)
+
+    # When: the public agent loop dispatches the provider's tool call.
+    with client:
+        events = list(run_agent(client, request))
+
+    # Then: dispatch rejects the call before writing the file.
+    results = [event for event in events if isinstance(event, ToolResult)]
+    assert results == [
+        ToolResult(
+            call_id="call_custom_cap",
+            name="write_file",
+            output="error: tool arguments exceed the 1-byte limit",
+        )
+    ]
     assert not path.exists()
 
 
@@ -81,7 +139,7 @@ def test_execute_tool_calls_converts_tool_exceptions_to_one_error_result() -> No
     history: list[ChatCompletionMessageParam] = []
 
     # When: the tool call is dispatched without starting a provider.
-    events = list(_execute_tool_calls((call,), history))
+    events = list(_execute_tool_calls((call,), history, DEFAULT_TOOL_ARGUMENT_BYTE_CAP))
 
     # Then: the exception becomes one non-sensitive ToolResult for that call id.
     results = [event for event in events if isinstance(event, ToolResult)]
@@ -114,7 +172,7 @@ def test_execute_tool_calls_logs_the_traceback_of_a_failed_tool(
     caplog.set_level(logging.ERROR)
 
     # When: the tool call is dispatched without starting a provider.
-    list(_execute_tool_calls((call,), []))
+    list(_execute_tool_calls((call,), [], DEFAULT_TOOL_ARGUMENT_BYTE_CAP))
 
     # Then: one error record names the tool and carries the original exception.
     [record] = caplog.records
