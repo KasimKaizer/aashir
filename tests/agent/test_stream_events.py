@@ -25,6 +25,7 @@ from tests.helpers import (
     make_round_trip_client,
     sse_body,
     sse_chunk,
+    tool_call,
 )
 
 
@@ -68,7 +69,7 @@ def test_run_agent_does_not_fabricate_reasoning_when_provider_omits_it() -> None
     assert not any(isinstance(event, ReasoningDelta) for event in events)
     assert not any(isinstance(event, ReasoningSummary) for event in events)
     assert answer_text(events) == "Hello"
-    assert isinstance(events[-1], TurnCompleted)
+    assert events[-1] == TurnCompleted(produced_answer=True)
 
 
 def test_run_agent_omits_tools_and_reasoning_effort_from_the_request_when_unset() -> (
@@ -114,6 +115,41 @@ def test_run_agent_yields_partial_deltas_then_raises_normalized_provider_error()
     assert isinstance(error.value.__cause__, APIError)
     assert answer_text(seen) == "Partial"
     assert not any(isinstance(event, TurnCompleted) for event in seen)
+
+
+def test_run_agent_reports_that_a_turn_without_answer_text_produced_none() -> None:
+    # Given: a provider stream that only reasons and then stops.
+    body = sse_body(
+        sse_chunk({"reasoning": "thinking"}),
+        sse_chunk({}, finish_reason="stop"),
+    )
+
+    # When: the agent consumes it.
+    with make_openai_client(httpx2.ByteStream(body)) as client:
+        events = list(run_agent(client, make_agent_request()))
+
+    # Then: the turn still completes, and says it produced no answer.
+    assert events[-1] == TurnCompleted(produced_answer=False)
+
+
+def test_run_agent_counts_answer_text_from_an_earlier_round() -> None:
+    # Given: a first round with text and a tool call, then an empty final round.
+    first_round = sse_body(
+        sse_chunk({"content": "Checking."}),
+        sse_chunk(
+            {"tool_calls": [tool_call(0, "call_1", "no_such_tool", "{}")]},
+            finish_reason="tool_calls",
+        ),
+    )
+    empty_final_round = sse_body(sse_chunk({}, finish_reason="stop"))
+    client, _requests = make_round_trip_client(first_round, empty_final_round)
+
+    # When: the agent runs both rounds.
+    with client:
+        events = list(run_agent(client, make_agent_request(with_tools=True)))
+
+    # Then: the run produced an answer even though its last round did not.
+    assert events[-1] == TurnCompleted(produced_answer=True)
 
 
 def test_run_agent_normalizes_a_stream_event_that_is_not_json() -> None:

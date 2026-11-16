@@ -165,7 +165,9 @@ def _configure_request(settings: Settings, user_prompt: str) -> AgentRequest:
 
 
 def _render_events(events: Iterable[AgentEvent]) -> None:
-    """Print answer deltas as they arrive and ignore all other event types.
+    """Print answer deltas as they arrive; warn on stderr if a turn had none.
+
+    Every other event type is ignored.
 
     Args:
         events: Agent events to render in arrival order.
@@ -174,6 +176,8 @@ def _render_events(events: Iterable[AgentEvent]) -> None:
         match event:
             case AnswerDelta(text=text):
                 print(text, end="", flush=True)
+            case TurnCompleted(produced_answer=False):
+                print("warn: the model returned no answer", file=sys.stderr)
             case (
                 ReasoningSummary()
                 | ReasoningDelta()

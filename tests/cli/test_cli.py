@@ -375,11 +375,49 @@ def test_render_events_prints_only_answer_text(
         ToolCallReceived(call_id="c1", name="example_tool", arguments="{}"),
         ToolResult(call_id="c1", name="example_tool", output="file-bytes"),
         AnswerDelta(text="lo"),
-        TurnCompleted(),
+        TurnCompleted(produced_answer=True),
     ]
 
     # When: the CLI renders the event stream without executing tools.
     cli._render_events(events)
 
     # Then: answer text is printed while all other event types stay hidden.
-    assert capsys.readouterr().out == "Hello"
+    captured = capsys.readouterr()
+    assert captured.out == "Hello"
+    assert captured.err == ""
+
+
+def test_render_events_warns_when_the_turn_produced_no_answer(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Given: a turn that only reasoned before completing.
+    events = [ReasoningDelta(text="thinking"), TurnCompleted(produced_answer=False)]
+
+    # When: the CLI renders the event stream.
+    cli._render_events(events)
+
+    # Then: stdout stays empty and stderr says why.
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "warn: the model returned no answer\n"
+
+
+@pytest.mark.usefixtures("configured_cli")
+def test_main_warns_and_exits_normally_when_the_model_returns_no_answer(
+    serve_provider: Callable[[OpenAI], list[ClientArguments]],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Given: a provider that reasons and stops without any answer text.
+    body = sse_body(
+        sse_chunk({"reasoning": "thinking"}),
+        sse_chunk({}, finish_reason="stop"),
+    )
+    serve_provider(make_openai_client(httpx2.ByteStream(body)))
+
+    # When: the CLI runs the turn.
+    cli.main()
+
+    # Then: it returns normally, with a warning instead of silence.
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "warn: the model returned no answer\n"

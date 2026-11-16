@@ -33,6 +33,7 @@ def run_agent(client: OpenAI, request: AgentRequest) -> Iterator[AgentEvent]:
     errors are normalized after any events already yielded from the stream.
     """
     history: list[ChatCompletionMessageParam] = list(request.messages)
+    produced_answer = False
 
     # TODO: Decide whether to enforce a whole-run wall-clock limit and what it should be.
     # 30 minutes is one candidate, not a settled default.
@@ -46,6 +47,7 @@ def run_agent(client: OpenAI, request: AgentRequest) -> Iterator[AgentEvent]:
                 category="protocol",
                 message="provider stream contained an event that is not JSON",
             ) from error
+        produced_answer = produced_answer or completion.content is not None
 
         # Provider finish reasons are open-ended, so unknown values get normalized.
         match completion.finish_reason:
@@ -55,7 +57,7 @@ def run_agent(client: OpenAI, request: AgentRequest) -> Iterator[AgentEvent]:
                         category="protocol",
                         message="stop completion contained tool calls",
                     )
-                yield TurnCompleted()
+                yield TurnCompleted(produced_answer=produced_answer)
                 return
             case "tool_calls":
                 if not completion.tool_calls:

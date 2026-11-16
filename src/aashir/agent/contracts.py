@@ -77,7 +77,13 @@ class ToolResult:
 
 @dataclass(frozen=True, slots=True)
 class TurnCompleted:
-    """Marks a successful assistant completion with no further tool calls."""
+    """Marks a successful assistant completion with no further tool calls.
+
+    ``produced_answer`` is false when no round of the run streamed any answer
+    text, for example when the model only reasoned and then stopped.
+    """
+
+    produced_answer: bool
 
 
 type AgentEvent = (

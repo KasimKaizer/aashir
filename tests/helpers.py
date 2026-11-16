@@ -116,17 +116,21 @@ def make_openai_client(stream: httpx2.SyncByteStream) -> OpenAI:
 
 def make_round_trip_client(
     first_turn: bytes,
+    final_turn: bytes | None = None,
 ) -> tuple[OpenAI, list[httpx2.Request]]:
-    """Build a client that replies ``first_turn``, then a final ``Done`` answer.
+    """Build a client that replies ``first_turn``, then a final answer.
 
     Args:
         first_turn: Complete SSE body for the first request, usually tool calls.
+        final_turn: Complete SSE body for every later request. Defaults to a
+            ``Done`` answer.
 
     Returns:
         The client and the list that records every request it receives.
     """
     requests: list[httpx2.Request] = []
-    final_turn = sse_body(sse_chunk({"content": "Done"}, finish_reason="stop"))
+    if final_turn is None:
+        final_turn = sse_body(sse_chunk({"content": "Done"}, finish_reason="stop"))
 
     def respond(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
