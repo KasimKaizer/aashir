@@ -45,6 +45,10 @@ class Settings(BaseModel):
         hide_input_in_errors=True,
     )
 
+    # TODO: Validate the key before the first model request, ideally with a provider
+    # call that consumes no tokens. Until then, a key with whitespace or non-ASCII
+    # characters reaches the HTTP library, which reports a misleading connection
+    # error or raises UnicodeEncodeError.
     api_key: SecretStr
     base_url: AnyHttpUrl
     model: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
