@@ -1,3 +1,5 @@
+"""Behavior of the built-in file tools."""
+
 import json
 import sys
 from pathlib import Path

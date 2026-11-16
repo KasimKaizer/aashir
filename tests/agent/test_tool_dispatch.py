@@ -1,3 +1,5 @@
+"""Tool dispatch limits and the schemas advertised to the provider."""
+
 import json
 import logging
 from dataclasses import replace

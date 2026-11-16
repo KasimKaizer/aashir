@@ -1,3 +1,5 @@
+"""Events produced from a provider stream, and the request that starts it."""
+
 import json
 from collections.abc import Iterator
 from typing import override

@@ -1,3 +1,5 @@
+"""Provider stream contracts: finish reasons and raw reasoning fields."""
+
 import json
 from pathlib import Path
 

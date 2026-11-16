@@ -1,3 +1,5 @@
+"""Tool calls and results in the conversation history sent back to the model."""
+
 import json
 from pathlib import Path
 

@@ -1,3 +1,5 @@
+"""Assembly of streamed tool-call fragments into ordered calls."""
+
 import json
 from pathlib import Path
 

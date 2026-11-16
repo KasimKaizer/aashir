@@ -1,3 +1,5 @@
+"""Safe replacement of files: failures, races, and refusals."""
+
 import errno
 import json
 import os

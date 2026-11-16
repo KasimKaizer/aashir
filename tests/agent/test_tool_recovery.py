@@ -1,3 +1,5 @@
+"""Recovery from incomplete, unknown, invalid, and duplicate tool calls."""
+
 import json
 from pathlib import Path
 

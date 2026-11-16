@@ -1,3 +1,5 @@
+"""Normalization of provider and SDK failures into ``ProviderError``."""
+
 import httpx2
 import pytest
 from openai import (
