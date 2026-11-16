@@ -138,7 +138,6 @@ def _stream_completion(
     if not has_choice:
         raise ProviderError(
             category="protocol",
-            error_type=None,
             message="provider stream contained no completion choices",
         )
 

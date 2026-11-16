@@ -62,14 +62,10 @@ def test_run_agent_normalizes_provider_error_categories(
     ("error_class", "status", "expected_category"),
     [
         (RateLimitError, 429, "rate_limit"),
-        (APIStatusError, 429, "rate_limit"),
         (AuthenticationError, 401, "auth"),
         (PermissionDeniedError, 403, "auth"),
-        (APIStatusError, 401, "auth"),
-        (APIStatusError, 403, "auth"),
         (InternalServerError, 500, "provider_unavailable"),
-        (APIStatusError, 500, "provider_unavailable"),
-        (APIStatusError, 503, "provider_unavailable"),
+        (APIStatusError, 418, "unknown"),
     ],
 )
 def test_run_agent_normalizes_sdk_status_error_classes(

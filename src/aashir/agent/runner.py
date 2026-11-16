@@ -45,7 +45,6 @@ def run_agent(client: OpenAI, request: AgentRequest) -> Iterator[AgentEvent]:
                 if completion.tool_calls:
                     raise ProviderError(
                         category="protocol",
-                        error_type=None,
                         message="stop completion contained tool calls",
                     )
                 yield TurnCompleted()
@@ -54,31 +53,26 @@ def run_agent(client: OpenAI, request: AgentRequest) -> Iterator[AgentEvent]:
                 if not completion.tool_calls:
                     raise ProviderError(
                         category="protocol",
-                        error_type=None,
                         message="tool_calls completion contained no tool calls",
                     )
             case "length":
                 raise ProviderError(
                     category="context_length",
-                    error_type=None,
                     message="completion was truncated at the model's token limit",
                 )
             case "content_filter":
                 raise ProviderError(
                     category="content_policy",
-                    error_type=None,
                     message="completion was blocked by the provider's content filter",
                 )
             case "function_call" | None:
                 raise ProviderError(
                     category="protocol",
-                    error_type=None,
                     message=f"completion did not finish successfully: {completion.finish_reason!r}",
                 )
             case unknown_finish_reason:
                 raise ProviderError(
                     category="unknown",
-                    error_type=None,
                     message=f"completion did not finish successfully: {unknown_finish_reason!r}",
                 )
 
