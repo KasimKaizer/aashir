@@ -1,5 +1,6 @@
 """The event-producing agent loop."""
 
+import json
 from collections.abc import Iterator
 
 from openai import APIError, OpenAI
@@ -25,7 +26,8 @@ def run_agent(client: OpenAI, request: AgentRequest) -> Iterator[AgentEvent]:
 
     Raises:
         ProviderError: If the provider returns an API error, an incomplete or filtered
-            completion, an unknown finish reason, or an invalid response protocol.
+            completion, an unknown finish reason, a stream event that is not JSON, or
+            an invalid response protocol.
 
     The request history is copied before tool messages are appended. Provider
     errors are normalized after any events already yielded from the stream.
@@ -39,6 +41,11 @@ def run_agent(client: OpenAI, request: AgentRequest) -> Iterator[AgentEvent]:
             completion = yield from _stream_completion(client, request, history)
         except APIError as error:
             raise _normalize_provider_error(error) from error
+        except json.JSONDecodeError as error:
+            raise ProviderError(
+                category="protocol",
+                message="provider stream contained an event that is not JSON",
+            ) from error
 
         # Provider finish reasons are open-ended, so unknown values get normalized.
         match completion.finish_reason:

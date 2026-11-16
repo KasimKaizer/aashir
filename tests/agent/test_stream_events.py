@@ -116,6 +116,26 @@ def test_run_agent_yields_partial_deltas_then_raises_normalized_provider_error()
     assert not any(isinstance(event, TurnCompleted) for event in seen)
 
 
+def test_run_agent_normalizes_a_stream_event_that_is_not_json() -> None:
+    # Given: partial answer text followed by a data line that is not JSON.
+    body = sse_chunk({"content": "Partial"}) + b"data: {not json}\n\n"
+    seen: list[AgentEvent] = []
+
+    # When: the consumer iterates the provider stream.
+    with (
+        make_openai_client(httpx2.ByteStream(body)) as client,
+        pytest.raises(ProviderError) as error,
+    ):
+        seen.extend(run_agent(client, make_agent_request()))
+
+    # Then: the failure is a protocol error that keeps its cause and earlier output.
+    assert error.value.category == "protocol"
+    assert error.value.message == "provider stream contained an event that is not JSON"
+    assert isinstance(error.value.__cause__, json.JSONDecodeError)
+    assert answer_text(seen) == "Partial"
+    assert not any(isinstance(event, TurnCompleted) for event in seen)
+
+
 @pytest.mark.parametrize(
     ("finish_reason", "expected_category"),
     [
