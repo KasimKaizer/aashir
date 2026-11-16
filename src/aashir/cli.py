@@ -1,6 +1,8 @@
 """Command-line entry point: parse flags, load settings, run the agent."""
 
 import argparse
+import io
+import os
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -203,6 +205,11 @@ def main() -> None:
         print("info: read selected credential file", file=sys.stderr)
     request = _configure_request(settings, arguments.prompt)
 
+    # An answer character the terminal's encoding cannot show prints as "?"
+    # instead of aborting the run.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(errors="replace")
+
     with OpenAI(
         api_key=settings.api_key.get_secret_value(),
         base_url=str(settings.base_url),
@@ -212,6 +219,20 @@ def main() -> None:
         except ProviderError as error:
             print(f"error: {error.category}: {error}", file=sys.stderr)
             raise SystemExit(1) from None
+        except BrokenPipeError:
+            _discard_stdout()
+            raise SystemExit(1) from None
+
+
+def _discard_stdout() -> None:
+    """Point stdout at the null device after its reader has gone away.
+
+    The text that could not be written stays in stdout's buffer, so without this
+    the interpreter's flush at exit fails again and prints a second error.
+    """
+    null_descriptor = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(null_descriptor, sys.stdout.fileno())
+    os.close(null_descriptor)
 
 
 if __name__ == "__main__":

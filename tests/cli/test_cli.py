@@ -1,6 +1,7 @@
 """CLI entrypoint behavior: validation, streaming, and answer presentation."""
 
 import io
+import os
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -362,6 +363,53 @@ def test_main_preserves_partial_answer_when_provider_returns_error(
     assert error.value.code == 1
     assert captured.err == "error: provider_unavailable: stream failed\n"
     assert captured.out == "Partial"
+
+
+@pytest.mark.usefixtures("configured_cli")
+def test_main_replaces_characters_the_terminal_cannot_encode(
+    monkeypatch: pytest.MonkeyPatch,
+    serve_provider: Callable[[OpenAI], list[ClientArguments]],
+) -> None:
+    # Given: an ASCII-only stdout and an answer that contains an emoji.
+    body = sse_body(sse_chunk({"content": "rocket 🚀 done"}, finish_reason="stop"))
+    serve_provider(make_openai_client(httpx2.ByteStream(body)))
+    terminal_bytes = io.BytesIO()
+    monkeypatch.setattr(
+        sys, "stdout", io.TextIOWrapper(terminal_bytes, encoding="ascii")
+    )
+
+    # When: the CLI prints the answer.
+    cli.main()
+    sys.stdout.flush()
+
+    # Then: the character it cannot show becomes a question mark and the run completes.
+    assert terminal_bytes.getvalue() == b"rocket ? done"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX broken-pipe errors")
+@pytest.mark.usefixtures("configured_cli")
+def test_main_exits_quietly_when_stdout_is_a_closed_pipe(
+    monkeypatch: pytest.MonkeyPatch,
+    serve_provider: Callable[[OpenAI], list[ClientArguments]],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Given: stdout is a pipe whose reader has already gone, as with ``| head``.
+    body = sse_body(sse_chunk({"content": "Hello"}, finish_reason="stop"))
+    serve_provider(make_openai_client(httpx2.ByteStream(body)))
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)
+    with os.fdopen(write_fd, "w", encoding="utf-8") as pipe_out:
+        monkeypatch.setattr(sys, "stdout", pipe_out)
+
+        # When: the CLI tries to print the answer.
+        with pytest.raises(SystemExit) as error:
+            cli.main()
+
+        # Then: it exits with status 1 and no message, and the text it could not
+        # write no longer makes the interpreter's final flush fail.
+        pipe_out.flush()
+    assert error.value.code == 1
+    assert capsys.readouterr().err == ""
 
 
 def test_render_events_prints_only_answer_text(
