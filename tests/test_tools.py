@@ -1,7 +1,9 @@
 """Behavior of the built-in file tools."""
 
 import json
+import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -155,6 +157,35 @@ def test_read_file_reads_only_the_requested_span(tmp_path: Path) -> None:
 
     # Then: the unread tail is never decoded.
     assert result == "1:first\n2:second"
+
+
+def _make_fifo(directory: Path) -> Path:
+    # Looked up at call time because ``os.mkfifo`` does not exist on Windows.
+    path = directory / "pipe"
+    os.mkfifo(path)
+    return path
+
+
+def _character_device(_directory: Path) -> Path:
+    return Path(os.devnull)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a FIFO and a POSIX device")
+@pytest.mark.parametrize(
+    ("make_special_file",),
+    [pytest.param(_make_fifo, id="fifo"), pytest.param(_character_device, id="device")],
+)
+def test_read_file_refuses_special_files_without_opening_them(
+    tmp_path: Path, make_special_file: Callable[[Path], Path]
+) -> None:
+    # Given: a FIFO, whose open blocks, and a character device such as /dev/zero.
+    path = make_special_file(tmp_path)
+
+    # When: the read tool is asked for it.
+    result = execute_tool_call("read_file", json.dumps({"file_path": str(path)}))
+
+    # Then: it refuses instead of blocking or reading without end.
+    assert result == f"error: {path} is not a regular file"
 
 
 def test_write_file_creates_file_in_missing_directories(

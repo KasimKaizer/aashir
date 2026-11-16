@@ -1,6 +1,7 @@
 """The ``read_file`` tool."""
 
 import itertools
+import stat
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -66,12 +67,18 @@ def _execute_read(arguments: ReadFileArguments) -> str:
 
     Returns:
         The selected lines joined by newlines, empty text when the span has no
-        lines, or error text if the path or file cannot be read.
+        lines, or error text if the path is not a regular file or cannot be read.
     """
     start_index = arguments.offset - 1
     stop_index = None if arguments.limit is None else start_index + arguments.limit
+    file_path = Path(arguments.file_path)
     try:
-        with Path(arguments.file_path).open(encoding="utf-8") as file:
+        # Opening a FIFO blocks until a writer appears, and a device such as
+        # /dev/zero has no end, so both are refused before opening. A symbolic
+        # link to a regular file is still read.
+        if not stat.S_ISREG(file_path.stat().st_mode):
+            return f"error: {file_path} is not a regular file"
+        with file_path.open(encoding="utf-8") as file:
             # islice rejects indexes above sys.maxsize, a line count no file reaches.
             selected_lines = itertools.islice(
                 file,
