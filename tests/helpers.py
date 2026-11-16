@@ -18,8 +18,13 @@ _JSON_OBJECT: Final[TypeAdapter[dict[str, JsonValue]]] = TypeAdapter(
 )
 _STREAM_END: Final = b"data: [DONE]\n\n"
 
-type ClientSettings = tuple[str, str]
-"""The ``(api_key, base_url)`` pair the CLI uses to create a provider client."""
+
+@dataclass(frozen=True, slots=True)
+class ClientArguments:
+    """The arguments the CLI passed when it created a provider client."""
+
+    api_key: str
+    base_url: str
 
 
 def sse_chunk[DeltaValue, ErrorValue](

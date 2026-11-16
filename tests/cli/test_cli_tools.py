@@ -1,6 +1,7 @@
 """End-to-end CLI workflows that call advertised tools."""
 
 import json
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from openai import OpenAI
 from aashir import cli
 from aashir.tools import AGENT_TOOLS
 from tests.helpers import (
-    ClientSettings,
+    ClientArguments,
     make_round_trip_client,
     sse_body,
     sse_chunk,
@@ -21,7 +22,7 @@ from tests.helpers import (
 
 @pytest.fixture
 def run_main_with_tool_call(
-    configured_cli: None, serve_provider: Callable[[OpenAI], list[ClientSettings]]
+    configured_cli: None, serve_provider: Callable[[OpenAI], list[ClientArguments]]
 ) -> Callable[[str, str], list[httpx2.Request]]:
     """Return a function that runs ``cli.main()`` against one provider tool call.
 
@@ -85,6 +86,28 @@ def test_main_returns_a_read_file_result_to_the_provider(
         "content": "1:café",
     }
     assert capsys.readouterr().out == "Done"
+
+
+def test_main_applies_the_tool_argument_byte_cap_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    run_main_with_tool_call: Callable[[str, str], list[httpx2.Request]],
+) -> None:
+    # Given: a 1-byte tool argument cap chosen by flag and a valid write call.
+    monkeypatch.setattr(
+        sys, "argv", ["aashir", "-p", "hello", "--tool-argument-byte-cap", "1"]
+    )
+    path = tmp_path / "blocked.txt"
+    arguments = json.dumps({"file_path": str(path), "content": "text"})
+
+    # When: the CLI completes the round trip.
+    _, follow_up_request = run_main_with_tool_call("write_file", arguments)
+
+    # Then: the call is rejected without writing, and the provider is told why.
+    assert not path.exists()
+    assert json.loads(follow_up_request.content)["messages"][-1]["content"] == (
+        "error: tool arguments exceed the 1-byte limit"
+    )
 
 
 def test_main_returns_a_tool_error_to_the_provider(

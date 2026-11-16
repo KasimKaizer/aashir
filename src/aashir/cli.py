@@ -1,17 +1,14 @@
+"""Command-line entry point: parse flags, load settings, run the agent."""
+
 import argparse
-import os
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import assert_never
+from typing import Final, assert_never
 
-from dotenv import load_dotenv
 from openai import OpenAI
-from openai.types.chat import (
-    ChatCompletionMessageParam,
-    ChatCompletionReasoningEffort,
-)
+from openai.types.chat import ChatCompletionMessageParam
 
 from aashir.agent import (
     AgentEvent,
@@ -25,103 +22,145 @@ from aashir.agent import (
     TurnCompleted,
     run_agent,
 )
+from aashir.settings import (
+    REASONING_EFFORT_CHOICES,
+    Settings,
+    SettingsError,
+    SettingsOverrides,
+    load_settings,
+)
 from aashir.tools import AGENT_TOOLS
 
+_DEFAULT_SYSTEM_PROMPT: Final = "You are a helpful assistant."
 
-# TODO: Replace this temporary CLI settings container with an Agent class that owns
-# conversation messages, configuration, and tools.
+
 @dataclass(frozen=True, slots=True)
-class _CLISettings:
-    """Environment-backed settings loaded for one CLI invocation."""
+class _CLIArguments:
+    """Arguments that control one CLI invocation."""
 
-    api_key: str | None
-    base_url: str | None
-    model_name: str
-    system_prompt_file: str | None
-    reasoning_effort: str | None
+    prompt: str
+    dotenv_path: Path | None
+    settings_overrides: SettingsOverrides
 
 
-def _load_settings() -> _CLISettings:
-    """Load dotenv and environment settings for the current invocation."""
-    load_dotenv()
-    return _CLISettings(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_BASE_URL"),
-        model_name=os.getenv("BASE_MODEL_NAME", ""),
-        system_prompt_file=os.getenv("SYSTEM_PROMPT_FILE"),
-        reasoning_effort=os.getenv("REASONING_EFFORT"),
+def _parse_arguments() -> _CLIArguments:
+    """Parse the prompt, the credential file, and every user-definable setting."""
+    parser = argparse.ArgumentParser(
+        epilog=(
+            "Each setting flag overrides its environment variable. The API key has "
+            "no flag so it stays out of shell history: set OPENAI_API_KEY in the "
+            "environment or in a credential-only file selected with --env-file."
+        )
+    )
+    parser.add_argument(
+        "-p",
+        "--prompt",
+        type=str,
+        required=True,
+        metavar="PROMPT",
+        help="text to send to the assistant",
+    )
+    parser.add_argument(
+        "-e",
+        "--env-file",
+        type=Path,
+        metavar="PATH",
+        help="read provider credentials from this credential-only dotenv file",
+    )
+    parser.add_argument(
+        "--base-url",
+        metavar="URL",
+        help="base URL of the provider's OpenAI-compatible API (OPENAI_BASE_URL)",
+    )
+    parser.add_argument(
+        "--model",
+        metavar="NAME",
+        help="name of the model to use (OPENAI_MODEL)",
+    )
+    parser.add_argument(
+        "--system-prompt-file",
+        metavar="PATH",
+        help="text file containing the system prompt (SYSTEM_PROMPT_FILE)",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=REASONING_EFFORT_CHOICES,
+        help=(
+            "reasoning level to request; choose one your model supports "
+            "(REASONING_EFFORT)"
+        ),
+    )
+    parser.add_argument(
+        "--tool-argument-byte-cap",
+        type=int,
+        metavar="BYTES",
+        help=(
+            "largest accepted tool-call argument size in UTF-8 bytes "
+            "(TOOL_ARGUMENT_BYTE_CAP)"
+        ),
+    )
+    arguments = parser.parse_args()
+    return _CLIArguments(
+        prompt=arguments.prompt,
+        dotenv_path=arguments.env_file,
+        settings_overrides=SettingsOverrides(
+            base_url=arguments.base_url,
+            model=arguments.model,
+            system_prompt_file=(
+                Path(arguments.system_prompt_file)
+                if arguments.system_prompt_file
+                else None
+            ),
+            reasoning_effort=arguments.reasoning_effort,
+            tool_argument_byte_cap=arguments.tool_argument_byte_cap,
+        ),
     )
 
 
-def _parse_reasoning_effort(value: str | None) -> ChatCompletionReasoningEffort:
-    """Validate the configured reasoning effort against SDK-supported values.
+def _read_system_prompt(prompt_file: Path | None) -> str:
+    """Return the prompt in ``prompt_file``, or the default prompt with a warning.
+
+    The default is used without a warning when no file was chosen. If the file
+    cannot be read or is empty, the user is warned on stderr.
+    """
+    if prompt_file is None:
+        return _DEFAULT_SYSTEM_PROMPT
+
+    try:
+        custom_prompt = prompt_file.read_text(encoding="utf-8")
+    except (UnicodeError, OSError) as error:
+        print(
+            f"warn: custom system prompt could not be loaded because of the following: {error}, using default prompt",
+            file=sys.stderr,
+        )
+        return _DEFAULT_SYSTEM_PROMPT
+
+    if not custom_prompt:
+        print(
+            "warn: custom system prompt file is empty, using default prompt",
+            file=sys.stderr,
+        )
+        return _DEFAULT_SYSTEM_PROMPT
+    return custom_prompt
+
+
+def _configure_request(settings: Settings, user_prompt: str) -> AgentRequest:
+    """Build the request for an agent run from validated settings.
 
     Returns:
-        The effort, or ``None`` when it is unset or empty so none is requested.
+        The agent request assembled from the prompt and settings.
     """
-    if not value:
-        return None
-
-    match value:
-        case "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max":
-            return value
-        case _:
-            raise RuntimeError(
-                f"Invalid REASONING_EFFORT {value!r}; expected one of: "
-                "none, minimal, low, medium, high, xhigh, or max."
-            )
-
-
-def _configure_request(settings: _CLISettings) -> AgentRequest:
-    """Parse CLI input and build the validated request for an agent run.
-
-    Returns:
-        The agent request assembled from the command-line prompt and settings.
-
-    Raises:
-        RuntimeError: If required settings are missing or invalid.
-        SystemExit: If command-line arguments are invalid.
-    """
-    p = argparse.ArgumentParser()
-    p.add_argument("-p", required=True)
-    cli_args = p.parse_args()
-
-    required_vars = {
-        "OPENAI_API_KEY": settings.api_key,
-        "OPENAI_BASE_URL": settings.base_url,
-        "BASE_MODEL_NAME": settings.model_name,
-    }
-    missing: list[str] = [
-        var for var, val in required_vars.items() if val in {"", None}
-    ]
-    if missing:
-        missing_list: str = ", ".join(missing)
-        raise RuntimeError(f"Missing required variables: {missing_list}")
-
-    reasoning_effort = _parse_reasoning_effort(settings.reasoning_effort)
-    prompt: str = "You are a helpful assistant."
-    if settings.system_prompt_file:
-        try:
-            if custom_prompt := Path(settings.system_prompt_file).read_text(
-                encoding="utf-8"
-            ):
-                prompt = custom_prompt
-        except (UnicodeError, OSError) as e:
-            print(
-                f"warn: custom system prompt could not be loaded because of the following: {e}, using default prompt",
-                file=sys.stderr,
-            )
-
     message_history: list[ChatCompletionMessageParam] = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": cli_args.p},
+        {"role": "system", "content": _read_system_prompt(settings.system_prompt_file)},
+        {"role": "user", "content": user_prompt},
     ]
 
     return AgentRequest(
-        model=settings.model_name,
+        model=settings.model,
         messages=message_history,
         tools=AGENT_TOOLS,
-        reasoning_effort=reasoning_effort,
+        reasoning_effort=settings.reasoning_effort,
+        tool_argument_byte_cap=settings.tool_argument_byte_cap,
     )
 
 
@@ -148,14 +187,22 @@ def _render_events(events: Iterable[AgentEvent]) -> None:
 
 
 def main() -> None:
-    settings = _load_settings()
+    """Run one agent turn for the prompt and settings given on the command line."""
+    arguments = _parse_arguments()
     try:
-        request = _configure_request(settings)
-    except RuntimeError as error:
+        settings = load_settings(arguments.settings_overrides, arguments.dotenv_path)
+    except SettingsError as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(2) from None
 
-    with OpenAI(api_key=settings.api_key, base_url=settings.base_url) as client:
+    if arguments.dotenv_path is not None:
+        print("info: read selected credential file", file=sys.stderr)
+    request = _configure_request(settings, arguments.prompt)
+
+    with OpenAI(
+        api_key=settings.api_key.get_secret_value(),
+        base_url=str(settings.base_url),
+    ) as client:
         try:
             _render_events(run_agent(client, request))
         except ProviderError as error:
