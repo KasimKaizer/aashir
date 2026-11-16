@@ -1,12 +1,16 @@
 """Shared building blocks for defining agent tools."""
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Final
 
 from openai.types.chat.chat_completion_tool_union_param import (
     ChatCompletionToolUnionParam,
 )
 from pydantic import BaseModel, ConfigDict, ValidationError
+
+_LOGGER: Final = logging.getLogger(__name__)
 
 
 class _ToolArguments(BaseModel):
@@ -61,5 +65,7 @@ class _ToolDefinition[ArgumentsT: _ToolArguments]:
         try:
             return self.execute(arguments)
         except Exception:
-            # Keep unexpected internal exception details out of model-visible output.
+            # The model sees only a generic error; the traceback goes to the log so a
+            # bug in a tool stays diagnosable.
+            _LOGGER.exception("tool %s failed unexpectedly", self.name)
             return "error: tool execution failed"

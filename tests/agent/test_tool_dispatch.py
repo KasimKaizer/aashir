@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,28 @@ def test_execute_tool_calls_converts_tool_exceptions_to_one_error_result() -> No
             "content": "error: tool execution failed",
         }
     ]
+
+
+def test_execute_tool_calls_logs_the_traceback_of_a_failed_tool(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Given: a read call whose path makes the real tool raise an unexpected
+    # ValueError (an embedded NUL byte is not a valid path).
+    call = _ToolCallAccumulator(
+        call_id="call_failed",
+        name="read_file",
+        arguments=json.dumps({"file_path": "bad\u0000name"}),
+    )
+    caplog.set_level(logging.ERROR)
+
+    # When: the tool call is dispatched without starting a provider.
+    list(_execute_tool_calls((call,), []))
+
+    # Then: one error record names the tool and carries the original exception.
+    [record] = caplog.records
+    assert record.getMessage() == "tool read_file failed unexpectedly"
+    assert record.exc_info is not None
+    assert record.exc_info[0] is ValueError
 
 
 @pytest.mark.parametrize(
