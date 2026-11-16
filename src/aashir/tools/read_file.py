@@ -28,12 +28,12 @@ class ReadFileArguments(_ToolArguments):
         ),
     ]
     offset: Annotated[
-        int | None,
+        int,
         Field(
             ge=1,
             description="First line to return, counting from 1. Defaults to line 1.",
         ),
-    ] = None
+    ] = 1
     limit: Annotated[
         int | None,
         Field(
@@ -68,8 +68,7 @@ def _execute_read(arguments: ReadFileArguments) -> str:
         The selected lines joined by newlines, empty text when the span has no
         lines, or error text if the path or file cannot be read.
     """
-    first_line_number = 1 if arguments.offset is None else arguments.offset
-    start_index = first_line_number - 1
+    start_index = arguments.offset - 1
     stop_index = None if arguments.limit is None else start_index + arguments.limit
     try:
         with Path(arguments.file_path).open(encoding="utf-8") as file:
@@ -82,7 +81,7 @@ def _execute_read(arguments: ReadFileArguments) -> str:
             numbered_lines = [
                 f"{line_number}:{line.removesuffix('\n')}"
                 for line_number, line in enumerate(
-                    selected_lines, start=first_line_number
+                    selected_lines, start=arguments.offset
                 )
             ]
     except (UnicodeError, OSError) as error:

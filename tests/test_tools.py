@@ -130,6 +130,17 @@ def test_read_file_rejects_invalid_range_arguments(
     assert result == f"error: {argument_name} must be a positive integer"
 
 
+def test_read_file_rejects_a_null_offset(numbered_file: Path) -> None:
+    # Given: an explicit null offset, which is not a line number.
+    raw_arguments = json.dumps({"file_path": str(numbered_file), "offset": None})
+
+    # When: the read tool validates the request.
+    result = execute_tool_call("read_file", raw_arguments)
+
+    # Then: it reports the argument instead of silently starting at line 1.
+    assert result == "error: offset must be a positive integer"
+
+
 def test_read_file_reads_only_the_requested_span(tmp_path: Path) -> None:
     # Given: a file with invalid UTF-8 far beyond the requested lines.
     path = tmp_path / "large.txt"

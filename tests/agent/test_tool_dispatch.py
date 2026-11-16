@@ -177,9 +177,10 @@ def test_advertised_read_file_schema_requires_a_path_and_positive_range_values()
     # Then: the path is required and non-empty, and offset and limit are positive.
     assert parameters["required"] == ["file_path"]
     assert parameters["properties"]["file_path"]["minLength"] == 1
-    for range_argument in ("offset", "limit"):
-        range_options = parameters["properties"][range_argument]["anyOf"]
-        assert {"type": "integer", "minimum": 1} in range_options
+    offset = parameters["properties"]["offset"]
+    assert (offset["type"], offset["minimum"], offset["default"]) == ("integer", 1, 1)
+    limit_options = parameters["properties"]["limit"]["anyOf"]
+    assert {"type": "integer", "minimum": 1} in limit_options
 
 
 def test_advertised_edit_file_schema_requires_a_path_and_strict_non_empty_edits() -> (
