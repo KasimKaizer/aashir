@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from openai.types.chat import ChatCompletionMessageParam
+from openai.types.shared_params import FunctionDefinition
 
 from aashir.agent import AgentRequest, ToolResult, run_agent
 from aashir.agent.tool_calls import _execute_tool_calls, _ToolCallAccumulator
@@ -17,6 +18,15 @@ from tests.helpers import (
     sse_chunk,
     tool_call,
 )
+
+
+def _advertised_function(tool_name: str) -> FunctionDefinition:
+    """Return the provider-visible definition of one built-in tool."""
+    return next(
+        tool["function"]
+        for tool in AGENT_TOOLS
+        if tool["type"] == "function" and tool["function"]["name"] == tool_name
+    )
 
 
 def test_execute_tool_calls_rejects_unknown_tools() -> None:
@@ -193,11 +203,7 @@ def test_advertised_schema_keeps_descriptive_model_title(
     tool_name: str, expected_title: str
 ) -> None:
     # Given: the advertised schema for a built-in file tool.
-    function_schema = next(
-        tool["function"]
-        for tool in AGENT_TOOLS
-        if tool["type"] == "function" and tool["function"]["name"] == tool_name
-    )
+    function_schema = _advertised_function(tool_name)
 
     # When: the provider-visible parameter schema is inspected.
     parameters_schema = function_schema["parameters"]
@@ -223,11 +229,7 @@ def test_advertised_read_file_schema_requires_a_path_and_positive_range_values()
     None
 ):
     # Given: the provider-visible read_file schema, as the provider receives it.
-    function_schema = next(
-        tool["function"]
-        for tool in AGENT_TOOLS
-        if tool["type"] == "function" and tool["function"]["name"] == "read_file"
-    )
+    function_schema = _advertised_function("read_file")
 
     # When: its parameters are read back as plain JSON.
     parameters = json.loads(json.dumps(function_schema["parameters"]))
@@ -245,11 +247,7 @@ def test_advertised_edit_file_schema_requires_a_path_and_strict_non_empty_edits(
     None
 ):
     # Given: the provider-visible edit_file schema, as the provider receives it.
-    function_schema = next(
-        tool["function"]
-        for tool in AGENT_TOOLS
-        if tool["type"] == "function" and tool["function"]["name"] == "edit_file"
-    )
+    function_schema = _advertised_function("edit_file")
 
     # When: its parameters are read back as plain JSON.
     parameters = json.loads(json.dumps(function_schema["parameters"]))
