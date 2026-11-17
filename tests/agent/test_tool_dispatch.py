@@ -8,11 +8,26 @@ from pathlib import Path
 import pytest
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.shared_params import FunctionDefinition
+from pydantic import BaseModel, ConfigDict
 
-from aashir.agent import AgentRequest, ToolResult, run_agent
+from aashir.agent import (
+    AgentEvent,
+    AgentRequest,
+    ToolCallReceived,
+    ToolResult,
+    run_agent,
+)
 from aashir.agent.tool_calls import _execute_tool_calls, _ToolCallAccumulator
-from aashir.tools import AGENT_TOOLS, DEFAULT_TOOL_ARGUMENT_BYTE_CAP
-from aashir.tools.edit_file import EditFileArguments
+from aashir.tools import (
+    DEFAULT_TOOL_ARGUMENT_BYTE_CAP,
+    EditFileArguments,
+    ToolCatalog,
+    ToolDefinition,
+    UncertainToolEffect,
+    edit_file,
+    read_file,
+    write_file,
+)
 from tests.helpers import (
     make_agent_request,
     make_round_trip_client,
@@ -21,12 +36,14 @@ from tests.helpers import (
     tool_call,
 )
 
+_FILE_TOOLS = ToolCatalog((read_file, write_file, edit_file))
+
 
 def _advertised_function(tool_name: str) -> FunctionDefinition:
     """Return the provider-visible definition of one built-in tool."""
     return next(
         tool["function"]
-        for tool in AGENT_TOOLS
+        for tool in _FILE_TOOLS.provider_tools()
         if tool["type"] == "function" and tool["function"]["name"] == tool_name
     )
 
@@ -41,7 +58,14 @@ def test_execute_tool_calls_rejects_unknown_tools() -> None:
     history: list[ChatCompletionMessageParam] = []
 
     # When: the tool call is dispatched without starting a provider.
-    events = list(_execute_tool_calls((call,), history, DEFAULT_TOOL_ARGUMENT_BYTE_CAP))
+    events = list(
+        _execute_tool_calls(
+            _FILE_TOOLS,
+            (call,),
+            history,
+            DEFAULT_TOOL_ARGUMENT_BYTE_CAP,
+        )
+    )
 
     # Then: it produces one unknown-tool result for the original call id.
     results = [event for event in events if isinstance(event, ToolResult)]
@@ -75,7 +99,14 @@ def test_execute_tool_calls_rejects_arguments_over_the_utf8_byte_cap(
     history: list[ChatCompletionMessageParam] = []
 
     # When: the tool call is dispatched with the default cap.
-    events = list(_execute_tool_calls((call,), history, DEFAULT_TOOL_ARGUMENT_BYTE_CAP))
+    events = list(
+        _execute_tool_calls(
+            _FILE_TOOLS,
+            (call,),
+            history,
+            DEFAULT_TOOL_ARGUMENT_BYTE_CAP,
+        )
+    )
 
     # Then: it returns one error result and does not write the file.
     results = [event for event in events if isinstance(event, ToolResult)]
@@ -140,34 +171,173 @@ def test_run_agent_enforces_the_requests_tool_argument_byte_cap(
     assert not path.exists()
 
 
-def test_execute_tool_calls_converts_tool_exceptions_to_one_error_result() -> None:
-    # Given: a read call whose path makes the real tool raise an unexpected
-    # ValueError (an embedded NUL byte is not a valid path).
-    call = _ToolCallAccumulator(
-        call_id="call_failed",
-        name="read_file",
-        arguments=json.dumps({"file_path": "bad\u0000name"}),
+def test_execute_tool_calls_stops_when_a_builtin_tool_effect_is_uncertain(
+    tmp_path: Path,
+) -> None:
+    # Given: a read whose path raises ValueError, followed by a write.
+    path = tmp_path / "should-not-be-written.txt"
+    calls = (
+        _ToolCallAccumulator(
+            call_id="call_failed",
+            name="read_file",
+            arguments=json.dumps({"file_path": "bad\u0000name"}),
+        ),
+        _ToolCallAccumulator(
+            call_id="call_write",
+            name="write_file",
+            arguments=json.dumps({"file_path": str(path), "content": "later"}),
+        ),
+    )
+    history: list[ChatCompletionMessageParam] = []
+    events: list[AgentEvent] = []
+
+    # When: the built-in catalog dispatches the batch.
+    with pytest.raises(UncertainToolEffect) as error:
+        for event in _execute_tool_calls(
+            _FILE_TOOLS,
+            calls,
+            history,
+            DEFAULT_TOOL_ARGUMENT_BYTE_CAP,
+        ):
+            events.append(event)
+
+    # Then: the run stops without a definite result or the later write.
+    assert error.value.tool_name == "read_file"
+    assert isinstance(error.value.__cause__, ValueError)
+    assert str(error.value.__cause__) not in str(error.value)
+    assert not any(isinstance(event, ToolResult) for event in events)
+    assert history == []
+    assert not path.exists()
+
+
+class _RecordQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    topic: str
+
+
+def test_execute_tool_calls_stops_after_a_custom_executor_raises() -> None:
+    # Given: a callback that records an effect and raises, then a later tool.
+    secret = "session-token-secret"
+    calls: list[str] = []
+
+    def mutate(_arguments: _RecordQuery) -> str:
+        calls.append("mutate")
+        raise RuntimeError(secret)
+
+    def later(arguments: _RecordQuery) -> str:
+        calls.append(arguments.topic)
+        return arguments.topic
+
+    catalog = ToolCatalog(
+        (
+            ToolDefinition(
+                name="mutate_record",
+                description="Record a fixture change.",
+                arguments_model=_RecordQuery,
+                execute=mutate,
+            ),
+            ToolDefinition(
+                name="later_step",
+                description="Run a later fixture step.",
+                arguments_model=_RecordQuery,
+                execute=later,
+            ),
+        )
+    )
+    batch = (
+        _ToolCallAccumulator(
+            call_id="call_mutate",
+            name="mutate_record",
+            arguments=json.dumps({"topic": "draft"}),
+        ),
+        _ToolCallAccumulator(
+            call_id="call_later",
+            name="later_step",
+            arguments=json.dumps({"topic": "next"}),
+        ),
+    )
+    history: list[ChatCompletionMessageParam] = []
+    events: list[AgentEvent] = []
+
+    # When: the batch is dispatched.
+    with pytest.raises(UncertainToolEffect) as error:
+        for event in _execute_tool_calls(
+            catalog,
+            batch,
+            history,
+            DEFAULT_TOOL_ARGUMENT_BYTE_CAP,
+        ):
+            events.append(event)
+
+    # Then: the first callback ran once, and the later tool did not.
+    assert calls == ["mutate"]
+    assert error.value.tool_name == "mutate_record"
+    assert secret not in str(error.value)
+    assert isinstance(error.value.__cause__, RuntimeError)
+    assert str(error.value.__cause__) == secret
+    assert [
+        event.call_id for event in events if isinstance(event, ToolCallReceived)
+    ] == ["call_mutate"]
+    assert not any(isinstance(event, ToolResult) for event in events)
+    assert history == []
+
+
+def test_execute_tool_calls_continues_after_a_validation_failure() -> None:
+    # Given: an invalid call followed by a valid call of the same selected tool.
+    calls: list[str] = []
+
+    def record(arguments: _RecordQuery) -> str:
+        calls.append(arguments.topic)
+        return arguments.topic
+
+    catalog = ToolCatalog(
+        (
+            ToolDefinition(
+                name="record_topic",
+                description="Record a fixture topic.",
+                arguments_model=_RecordQuery,
+                execute=record,
+            ),
+        )
+    )
+    batch = (
+        _ToolCallAccumulator(
+            call_id="call_invalid",
+            name="record_topic",
+            arguments="{",
+        ),
+        _ToolCallAccumulator(
+            call_id="call_valid",
+            name="record_topic",
+            arguments=json.dumps({"topic": "kept"}),
+        ),
     )
     history: list[ChatCompletionMessageParam] = []
 
-    # When: the tool call is dispatched without starting a provider.
-    events = list(_execute_tool_calls((call,), history, DEFAULT_TOOL_ARGUMENT_BYTE_CAP))
-
-    # Then: the exception becomes one non-sensitive ToolResult for that call id.
-    results = [event for event in events if isinstance(event, ToolResult)]
-    assert results == [
-        ToolResult(
-            call_id="call_failed",
-            name="read_file",
-            output="error: tool execution failed",
+    # When: the batch is dispatched.
+    events = list(
+        _execute_tool_calls(
+            catalog,
+            batch,
+            history,
+            DEFAULT_TOOL_ARGUMENT_BYTE_CAP,
         )
-    ]
-    assert history == [
-        {
-            "role": "tool",
-            "tool_call_id": "call_failed",
-            "content": "error: tool execution failed",
-        }
+    )
+
+    # Then: the invalid call is not run, and the later call is.
+    assert calls == ["kept"]
+    results = [event for event in events if isinstance(event, ToolResult)]
+    assert results[0].call_id == "call_invalid"
+    assert results[0].output.startswith("error: invalid arguments")
+    assert results[1] == ToolResult(
+        call_id="call_valid",
+        name="record_topic",
+        output="kept",
+    )
+    assert [message["content"] for message in history] == [
+        results[0].output,
+        "kept",
     ]
 
 
@@ -184,7 +354,15 @@ def test_execute_tool_calls_logs_the_traceback_of_a_failed_tool(
     caplog.set_level(logging.ERROR)
 
     # When: the tool call is dispatched without starting a provider.
-    list(_execute_tool_calls((call,), [], DEFAULT_TOOL_ARGUMENT_BYTE_CAP))
+    with pytest.raises(UncertainToolEffect):
+        list(
+            _execute_tool_calls(
+                _FILE_TOOLS,
+                (call,),
+                [],
+                DEFAULT_TOOL_ARGUMENT_BYTE_CAP,
+            )
+        )
 
     # Then: one error record names the tool and carries the original exception.
     [record] = caplog.records

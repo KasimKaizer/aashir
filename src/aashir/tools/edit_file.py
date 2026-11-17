@@ -1,14 +1,13 @@
 """The ``edit_file`` tool."""
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Final
 
-from pydantic import ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aashir.tools.base import (
-    _generic_validation_error_message,
-    _ToolArguments,
-    _ToolDefinition,
+    ToolDefinition,
+    generic_validation_error_message,
 )
 from aashir.tools.file_replacement import (
     _FileReplacementError,
@@ -19,10 +18,15 @@ from aashir.tools.file_replacement import (
 
 # Public on purpose: pydantic derives this schema's `$defs`/`$ref` key from the
 # class name, and the provider sees that key.
-class TextEdit(_ToolArguments):
+class TextEdit(BaseModel):
     """One exact text replacement within a file."""
 
-    model_config = ConfigDict(title="TextEdit")
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        title="TextEdit",
+    )
 
     old_text: Annotated[
         str,
@@ -41,10 +45,15 @@ class TextEdit(_ToolArguments):
 
 
 # Public on purpose: the class name is also the schema title the provider sees.
-class EditFileArguments(_ToolArguments):
+class EditFileArguments(BaseModel):
     """Arguments for applying exact text replacements to a file."""
 
-    model_config = ConfigDict(title="EditFileArguments")
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        title="EditFileArguments",
+    )
 
     file_path: Annotated[
         str,
@@ -84,7 +93,7 @@ def _edit_validation_error_message(error: ValidationError) -> str:
         case ("edits", index, "new_text"):
             return f"error: edit at index {index} - 'new_text' must be a string"
         case _:
-            return _generic_validation_error_message(error)
+            return generic_validation_error_message(error)
 
 
 def _normalize_newlines(text: str) -> str:
@@ -174,7 +183,7 @@ def _execute_edit(arguments: EditFileArguments) -> str:
     )
 
 
-_EDIT_FILE_TOOL = _ToolDefinition(
+edit_file: Final[ToolDefinition[EditFileArguments]] = ToolDefinition(
     name="edit_file",
     description=(
         "Edit a single file using exact text replacement. Every "

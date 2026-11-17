@@ -104,9 +104,8 @@ def run_agent(client: OpenAI, request: AgentRequest) -> Iterator[AgentEvent]:
                 ],
             }
         )
-        # TODO: Consider whether to check calls against request.tools before dispatch;
-        # the current loop executes any tool call returned by the provider.
         yield from _execute_tool_calls(
+            request.tools,
             completion.tool_calls,
             history,
             request.tool_argument_byte_cap,

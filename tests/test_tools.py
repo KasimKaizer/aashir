@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from aashir.tools import execute_tool_call
+from aashir.tools import ToolCatalog, edit_file, read_file, write_file
+
+_FILE_TOOLS = ToolCatalog((read_file, write_file, edit_file))
+
+
+def execute_tool_call(tool_name: str, raw_arguments: str) -> str:
+    return _FILE_TOOLS.execute(tool_name, raw_arguments)
 
 
 @pytest.mark.parametrize(

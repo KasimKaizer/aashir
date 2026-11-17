@@ -1,14 +1,13 @@
 """The ``write_file`` tool."""
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Final
 
-from pydantic import ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aashir.tools.base import (
-    _generic_validation_error_message,
-    _ToolArguments,
-    _ToolDefinition,
+    ToolDefinition,
+    generic_validation_error_message,
 )
 from aashir.tools.file_replacement import (
     _FileReplacementError,
@@ -18,10 +17,15 @@ from aashir.tools.file_replacement import (
 
 
 # Public on purpose: the class name is also the schema title the provider sees.
-class WriteFileArguments(_ToolArguments):
+class WriteFileArguments(BaseModel):
     """Arguments for writing a UTF-8 text file."""
 
-    model_config = ConfigDict(title="WriteFileArguments")
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        title="WriteFileArguments",
+    )
 
     file_path: Annotated[
         str,
@@ -42,7 +46,7 @@ def _write_validation_error_message(error: ValidationError) -> str:
         case ("content",):
             return "error: content must be a string"
         case _:
-            return _generic_validation_error_message(error)
+            return generic_validation_error_message(error)
 
 
 def _execute_write(arguments: WriteFileArguments) -> str:
@@ -70,7 +74,7 @@ def _execute_write(arguments: WriteFileArguments) -> str:
     )
 
 
-_WRITE_FILE_TOOL = _ToolDefinition(
+write_file: Final[ToolDefinition[WriteFileArguments]] = ToolDefinition(
     name="write_file",
     description=(
         "Write content to a file. Creates the file if it doesn't exist, "

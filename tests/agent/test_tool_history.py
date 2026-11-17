@@ -13,7 +13,7 @@ from aashir.agent import (
     TurnCompleted,
     run_agent,
 )
-from aashir.tools import AGENT_TOOLS
+from aashir.tools import ToolCatalog, edit_file, read_file, write_file
 from tests.helpers import (
     make_round_trip_client,
     run_tool_round_trip,
@@ -113,7 +113,9 @@ def test_run_agent_does_not_change_the_callers_message_list(
         {"role": "user", "content": "use a tool"}
     ]
     request = AgentRequest(
-        model="test-model", messages=initial_messages, tools=AGENT_TOOLS
+        model="test-model",
+        messages=initial_messages,
+        tools=ToolCatalog((read_file, write_file, edit_file)),
     )
     client, _ = make_round_trip_client(first_turn)
 

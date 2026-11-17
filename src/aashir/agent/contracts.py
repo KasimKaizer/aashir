@@ -5,17 +5,17 @@ from dataclasses import dataclass, field
 from openai.types.chat import (
     ChatCompletionMessageParam,
     ChatCompletionReasoningEffort,
-    ChatCompletionToolUnionParam,
 )
 
-from aashir.tools import DEFAULT_TOOL_ARGUMENT_BYTE_CAP
+from aashir.tools import DEFAULT_TOOL_ARGUMENT_BYTE_CAP, ToolCatalog
 
 
 @dataclass(frozen=True, slots=True)
 class AgentRequest:
     """Model input, starting conversation history, and limits for one agent run.
 
-    An empty ``tools`` list advertises no tools to the model.
+    ``tools`` is the catalog selected for the run. An empty catalog advertises
+    no tools and runs no tools.
 
     Raises:
         ValueError: If ``tool_argument_byte_cap`` is not positive, since every
@@ -24,7 +24,7 @@ class AgentRequest:
 
     model: str
     messages: list[ChatCompletionMessageParam]
-    tools: list[ChatCompletionToolUnionParam] = field(default_factory=list)
+    tools: ToolCatalog = field(default_factory=ToolCatalog)
     reasoning_effort: ChatCompletionReasoningEffort = None
     tool_argument_byte_cap: int = DEFAULT_TOOL_ARGUMENT_BYTE_CAP
 

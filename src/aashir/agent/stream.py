@@ -108,8 +108,8 @@ def _stream_completion(
         reasoning_effort=(
             request.reasoning_effort if request.reasoning_effort is not None else omit
         ),
-        # The API rejects an empty tools list, so an empty list is left out.
-        tools=request.tools if request.tools else omit,
+        # The API rejects an empty tools list, so an empty catalog is left out.
+        tools=request.tools.provider_tools() or omit,
     ) as stream:
         for event in stream:
             if not event.choices:

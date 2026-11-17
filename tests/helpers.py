@@ -11,7 +11,7 @@ from openai.types.chat import ChatCompletionReasoningEffort
 from pydantic import JsonValue, TypeAdapter
 
 from aashir.agent import AgentEvent, AgentRequest, AnswerDelta, run_agent
-from aashir.tools import AGENT_TOOLS
+from aashir.tools import ToolCatalog, edit_file, read_file, write_file
 
 _JSON_OBJECT: Final[TypeAdapter[dict[str, JsonValue]]] = TypeAdapter(
     dict[str, JsonValue]
@@ -92,11 +92,11 @@ def make_agent_request(
     with_tools: bool = False,
     reasoning_effort: ChatCompletionReasoningEffort = None,
 ) -> AgentRequest:
-    """Build a one-message request, advertising the built-in tools on demand."""
+    """Build a one-message request, selecting the file tools on demand."""
     return AgentRequest(
         model="test-model",
         messages=[{"role": "user", "content": "hi"}],
-        tools=AGENT_TOOLS if with_tools else [],
+        tools=ToolCatalog((read_file, write_file, edit_file)) if with_tools else ToolCatalog(),
         reasoning_effort=reasoning_effort,
     )
 

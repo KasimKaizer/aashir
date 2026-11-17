@@ -8,19 +8,27 @@ from typing import Final
 from openai.types.chat.chat_completion_tool_union_param import (
     ChatCompletionToolUnionParam,
 )
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ValidationError
+
+from aashir.tools.errors import UncertainToolEffect
 
 _LOGGER: Final = logging.getLogger(__name__)
 
 
-class _ToolArguments(BaseModel):
-    """Base configuration for validated model tool arguments."""
+def generic_validation_error_message(error: ValidationError) -> str:
+    """Format a validation error for the model without the rejected input.
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    Pass this function as ``validation_error_formatter`` on a
+    ``ToolDefinition``. It is also the default formatter.
 
+    Args:
+        error: Validation error for one tool call's arguments.
 
-def _generic_validation_error_message(error: ValidationError) -> str:
-    """Format validation errors without echoing the invalid input."""
+    Returns:
+        The first issue as ``error: invalid arguments: {message}`` when the
+        issue is an extra field. Every other issue is
+        ``error: invalid arguments at {location}: {message}``.
+    """
     issue = error.errors(include_input=False)[0]
     if issue["type"] == "extra_forbidden":
         # Pydantic includes the unrecognized input key in the error location.
@@ -31,15 +39,19 @@ def _generic_validation_error_message(error: ValidationError) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class _ToolDefinition[ArgumentsT: _ToolArguments]:
-    """Describe one model-visible tool and its validated executor."""
+class ToolDefinition[ArgumentsT: BaseModel]:
+    """One tool: its name, argument model, and typed executor.
+
+    Built-in tools and caller-supplied tools are both values of this type.
+    The argument model is the caller's own Pydantic model.
+    """
 
     name: str
     description: str
     arguments_model: type[ArgumentsT]
     execute: Callable[[ArgumentsT], str]
     validation_error_formatter: Callable[[ValidationError], str] = (
-        _generic_validation_error_message
+        generic_validation_error_message
     )
 
     def provider_tool(self) -> ChatCompletionToolUnionParam:
@@ -54,7 +66,20 @@ class _ToolDefinition[ArgumentsT: _ToolArguments]:
         }
 
     def execute_json(self, raw_arguments: str) -> str:
-        """Validate raw arguments, then execute and normalize tool failures."""
+        """Validate raw arguments, then run the executor.
+
+        Args:
+            raw_arguments: JSON object supplied for this tool call.
+
+        Returns:
+            The executor's text, or a validation error when the arguments do
+            not match the model. Validation failure does not call the executor.
+
+        Raises:
+            UncertainToolEffect: The executor started and then raised. The
+                original exception is preserved as ``__cause__`` and is not
+                included in this error's text.
+        """
         try:
             arguments = self.arguments_model.model_validate_json(raw_arguments)
         except ValidationError as error:
@@ -64,8 +89,9 @@ class _ToolDefinition[ArgumentsT: _ToolArguments]:
         # TODO: Enforce workspace containment in the filesystem-tool boundary.
         try:
             return self.execute(arguments)
-        except Exception:
-            # The model sees only a generic error; the traceback goes to the log so a
-            # bug in a tool stays diagnosable.
+        except Exception as error:
+            # Any exception after the callback starts can follow an effect that
+            # already happened. Keep that exception as the private cause and do
+            # not turn it into a model-visible error string.
             _LOGGER.exception("tool %s failed unexpectedly", self.name)
-            return "error: tool execution failed"
+            raise UncertainToolEffect(tool_name=self.name) from error

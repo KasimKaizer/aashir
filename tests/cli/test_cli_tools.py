@@ -10,7 +10,7 @@ import pytest
 from openai import OpenAI
 
 from aashir import cli
-from aashir.tools import AGENT_TOOLS
+from aashir.tools import ToolCatalog, edit_file, read_file, write_file
 from tests.helpers import (
     ClientArguments,
     make_round_trip_client,
@@ -60,7 +60,9 @@ def test_main_sends_the_configured_request_to_the_provider(
         {"role": "system", "content": "You are a test assistant."},
         {"role": "user", "content": "hello"},
     ]
-    assert payload["tools"] == AGENT_TOOLS
+    assert payload["tools"] == list(
+        ToolCatalog((read_file, write_file, edit_file)).provider_tools()
+    )
 
 
 def test_main_returns_a_read_file_result_to_the_provider(

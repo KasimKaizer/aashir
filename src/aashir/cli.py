@@ -31,9 +31,10 @@ from aashir.settings import (
     SettingsOverrides,
     load_settings,
 )
-from aashir.tools import AGENT_TOOLS
+from aashir.tools import ToolCatalog, edit_file, read_file, write_file
 
 _DEFAULT_SYSTEM_PROMPT: Final = "You are a helpful assistant."
+_CLI_TOOLS: Final = ToolCatalog((read_file, write_file, edit_file))
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +161,7 @@ def _configure_request(settings: Settings, user_prompt: str) -> AgentRequest:
     return AgentRequest(
         model=settings.model,
         messages=message_history,
-        tools=AGENT_TOOLS,
+        tools=_CLI_TOOLS,
         reasoning_effort=settings.reasoning_effort,
         tool_argument_byte_cap=settings.tool_argument_byte_cap,
     )

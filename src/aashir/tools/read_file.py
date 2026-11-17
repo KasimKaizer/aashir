@@ -4,22 +4,26 @@ import itertools
 import stat
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Final
 
-from pydantic import ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aashir.tools.base import (
-    _generic_validation_error_message,
-    _ToolArguments,
-    _ToolDefinition,
+    ToolDefinition,
+    generic_validation_error_message,
 )
 
 
 # Public on purpose: the class name is also the schema title the provider sees.
-class ReadFileArguments(_ToolArguments):
+class ReadFileArguments(BaseModel):
     """Arguments for reading a UTF-8 text file."""
 
-    model_config = ConfigDict(title="ReadFileArguments")
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        title="ReadFileArguments",
+    )
 
     file_path: Annotated[
         str,
@@ -53,7 +57,7 @@ def _read_validation_error_message(error: ValidationError) -> str:
         case ("offset",) | ("limit",):
             return f"error: {issue['loc'][0]} must be a positive integer"
         case _:
-            return _generic_validation_error_message(error)
+            return generic_validation_error_message(error)
 
 
 def _execute_read(arguments: ReadFileArguments) -> str:
@@ -96,7 +100,7 @@ def _execute_read(arguments: ReadFileArguments) -> str:
     return "\n".join(numbered_lines)
 
 
-_READ_FILE_TOOL = _ToolDefinition(
+read_file: Final[ToolDefinition[ReadFileArguments]] = ToolDefinition(
     name="read_file",
     description=(
         "Read a file. Every returned line is formatted as N:text, "
