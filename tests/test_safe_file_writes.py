@@ -20,6 +20,7 @@ _FILE_TOOLS = ToolCatalog((read_file, write_file, edit_file))
 def execute_tool_call(tool_name: str, raw_arguments: str) -> str:
     return _FILE_TOOLS.execute(tool_name, raw_arguments)
 
+
 _ORIGINAL_TEXT: Final = "original text"
 _REPLACED_BYTES: Final = b"replaced text"
 # Same length as _ORIGINAL_TEXT, so size alone cannot reveal the change.

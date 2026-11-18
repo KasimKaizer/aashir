@@ -394,9 +394,7 @@ def test_executor_exception_after_a_mutation_is_uncertain_and_is_not_retried() -
 
     # Then: the effect is uncertain, the secret stays private, and it ran once.
     assert error.value.tool_name == "retrieve_handbook"
-    assert str(error.value) == (
-        "tool retrieve_handbook ended with an uncertain effect"
-    )
+    assert str(error.value) == ("tool retrieve_handbook ended with an uncertain effect")
     assert secret not in str(error.value)
     assert isinstance(error.value.__cause__, RuntimeError)
     assert str(error.value.__cause__) == secret

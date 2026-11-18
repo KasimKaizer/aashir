@@ -52,7 +52,10 @@ def _schema_problem(model: type[BaseModel]) -> str | None:
     if config.get("frozen") is not True:
         return "argument model must set frozen=True"
     schema = model.model_json_schema()
-    if schema.get("type") != "object" or schema.get("additionalProperties") is not False:
+    if (
+        schema.get("type") != "object"
+        or schema.get("additionalProperties") is not False
+    ):
         return "argument schema must be a closed object"
     return None
 
@@ -131,8 +134,6 @@ class ToolCatalog:
 
         argument_byte_count = len(raw_arguments.encode("utf-8", errors="surrogatepass"))
         if argument_byte_count > argument_byte_cap:
-            return (
-                f"error: tool arguments exceed the {argument_byte_cap}-byte limit"
-            )
+            return f"error: tool arguments exceed the {argument_byte_cap}-byte limit"
 
         return definition.execute_json(raw_arguments)

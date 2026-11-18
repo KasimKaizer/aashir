@@ -96,7 +96,9 @@ def make_agent_request(
     return AgentRequest(
         model="test-model",
         messages=[{"role": "user", "content": "hi"}],
-        tools=ToolCatalog((read_file, write_file, edit_file)) if with_tools else ToolCatalog(),
+        tools=ToolCatalog((read_file, write_file, edit_file))
+        if with_tools
+        else ToolCatalog(),
         reasoning_effort=reasoning_effort,
     )
 
